@@ -23,6 +23,9 @@ if [[ "${FORCE_RENEW}" == "true" ]]; then
     FORCE_RENEW_FLAG="--force-renewal"
 fi
 
+# Set CRON_SCHEDULE to run by default every day at 2am
+CRON_SCHEDULE="${CRON_SCHEDULE:-'0 2 * * *'}"
+
 # Function to print messages in a box
 print_message() {
     local message="$1"
@@ -131,9 +134,9 @@ reload_nginx() {
 # Function to configure a cron job that runs renew_cert_main every minute
 configure_cron_job() {
     SCRIPT_NAME=$(basename "$0")
-    local cron_job="* * * * * bash /opt/$SCRIPT_NAME renew >> /opt/renew.info"
+    local cron_job="$CRON_SCHEDULE bash /opt/$SCRIPT_NAME renew >> /opt/renew.info"
     (crontab -l | grep -F "$cron_job") || (crontab -l; echo "$cron_job") | crontab -
-    echo "🕒 Cron job configured to check certificate renewal every minute."
+    echo "🕒 Cron job configured to check certificate renewal : $CRON_SCHEDULE"
     echo
     crond start
 }

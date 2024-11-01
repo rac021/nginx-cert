@@ -73,9 +73,7 @@ To use this setup with Docker Compose, you can define the environment variables 
 
 services:
   nginx:
-    build:
-      context: .
-      dockerfile: Dockerfile
+    image: rac021/docker-haproxy-certbot
     environment:
       - RUN_CERTBOT=true
       - CERTBOT_EMAIL=your-email@example.com

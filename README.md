@@ -73,7 +73,7 @@ To use this setup with Docker Compose, you can define the environment variables 
 
 services:
   nginx:
-    image: rac021/docker-haproxy-certbot
+    image: rac021/nginx-certbot
     environment:
       - RUN_CERTBOT=true
       - CERTBOT_EMAIL=your-email@example.com
@@ -105,7 +105,7 @@ services:
               -e STAGING=false    \
               -p 80:80   \
               -p 443:443 \
-              nginx-certbot
+              rac021/nginx-certbot
 ```
 
 2. ### With Docker Compose :

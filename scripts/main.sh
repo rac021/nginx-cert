@@ -17,8 +17,8 @@ source "./utils/nginx.sh"
 source "./utils/helper.sh"
 source "./utils/cron_setup.sh"
 source "./utils/ssl_cert_toolkit.sh"
-source "./cert_managers/cert_zerossl.sh"
-source "./cert_managers/cert_lets_encrypt.sh"
+source "./cert_managers/zerossl.sh"
+source "./cert_managers/lets_encrypt.sh"
 
 #####################################################
 #####################################################

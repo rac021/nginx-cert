@@ -9,8 +9,8 @@ request_first_letsencrypt_certificate() {
     print_message "/ Requesting a new certificate with Certbot/Standalone on port 80 ..."
     echo
     certbot certonly --standalone               \
-                     --email "${CERT_EMAIL}"    \
-                     -d "${CERT_DOMAINS}"       \
+                     --email "${CERTME_EMAIL}"  \
+                     -d "${CERTME_DOMAINS}"     \
                      --agree-tos                \
                      ${STAGING_FLAG}            \
                      --non-interactive          \
@@ -21,7 +21,7 @@ request_first_letsencrypt_certificate() {
 
 # Function to force renew the certificate with Certbot
 request_renew_letsencrypt_certificate() {
-    echo "Attempting to renew certificate for ${CERT_DOMAINS}..."
+    echo "Attempting to renew certificate for ${CERTME_DOMAINS}..."
     echo
     pkill certbot
     sleep 1
@@ -32,8 +32,8 @@ request_renew_letsencrypt_certificate() {
     while (( attempt <= max_attempts )); do
         echo "🔄 Attempt ${attempt} of ${max_attempts}..."
         
-        if certbot renew ${FORCE_RENEW_FLAG} --non-interactive ${STAGING_FLAG} --http-01-port $CERT_PROXY_PASS_PORT 2>&1 | tee /dev/stderr; then
-            print_message "✅ Certificate renewed successfully for ${CERT_DOMAINS}."
+        if certbot renew ${FORCE_RENEW_FLAG} --non-interactive ${STAGING_FLAG} --http-01-port $CERTME_PROXY_PASS_PORT 2>&1 | tee /dev/stderr; then
+            print_message "✅ Certificate renewed successfully for ${CERTME_DOMAINS}."
             success=true
             break
         else
@@ -44,7 +44,7 @@ request_renew_letsencrypt_certificate() {
     done
 
     if ! $success; then
-        print_message "❌ All renewal attempts failed for ${CERT_DOMAINS}."
+        print_message "❌ All renewal attempts failed for ${CERTME_DOMAINS}."
         echo "📝 Check the output above for details."
     fi
 

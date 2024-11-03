@@ -9,30 +9,30 @@ request_first_zero_certificate() {
 
     local should_start_server="$1"  # Add parameter to control server start/stop
 
-    echo "🔑 Requesting the certificate with ZeroSSL for IP ${CERT_DOMAINS} ..."
+    echo "🔑 Requesting the certificate with ZeroSSL for IP ${CERTME_DOMAINS} ..."
     
     # Create directory if not exists
-    mkdir -p "$LE_ROOT_PATH/${CERT_DOMAINS}"
+    mkdir -p "$LE_ROOT_PATH/${CERTME_DOMAINS}"
 
     # Generate SSL files
-    if [ ! -f "$LE_ROOT_PATH/${CERT_DOMAINS}/$CSR_NAME"  ]; then
-         create_private_key_with_csr "${CERT_DOMAINS}" "$LE_ROOT_PATH" "$CSR_NAME" "$PRIV_KEY_NAME"
+    if [ ! -f "$LE_ROOT_PATH/${CERTME_DOMAINS}/$CSR_NAME"  ]; then
+         create_private_key_with_csr "${CERTME_DOMAINS}" "$LE_ROOT_PATH" "$CSR_NAME" "$PRIV_KEY_NAME"
     fi
     
-    if [ ! -f "$LE_ROOT_PATH/${CERT_DOMAINS}/$CSR_NAME"  ]; then
-         echo "❌ Failed to generate [ $LE_ROOT_PATH/${CERT_DOMAINS}/$CSR_NAME ] ! "
+    if [ ! -f "$LE_ROOT_PATH/${CERTME_DOMAINS}/$CSR_NAME"  ]; then
+         echo "❌ Failed to generate [ $LE_ROOT_PATH/${CERTME_DOMAINS}/$CSR_NAME ] ! "
          exit 1
     fi
-    if [ ! -f "$LE_ROOT_PATH/${CERT_DOMAINS}/$PRIV_KEY_NAME" ]; then
-         echo "❌ Failed to generate [ $LE_ROOT_PATH/${CERT_DOMAINS}/$PRIV_KEY_NAME ] ! "
+    if [ ! -f "$LE_ROOT_PATH/${CERTME_DOMAINS}/$PRIV_KEY_NAME" ]; then
+         echo "❌ Failed to generate [ $LE_ROOT_PATH/${CERTME_DOMAINS}/$PRIV_KEY_NAME ] ! "
          exit 2
     fi
  
     # Draft certificate at ZeroSSL
-    local response=$( curl -s -X POST "https://api.zerossl.com/certificates?access_key=${CERT_ZEROSSL_API_KEY}" \
-                              -d "certificate_domains=${CERT_DOMAINS}" \
-                              -d "certificate_validity_days=90"        \
-                              --data-urlencode certificate_csr@$LE_ROOT_PATH/${CERT_DOMAINS}/$CSR_NAME )
+    local response=$( curl -s -X POST "https://api.zerossl.com/certificates?access_key=${CERTME_ZEROSSL_API_KEY}" \
+                              -d "certificate_domains=${CERTME_DOMAINS}" \
+                              -d "certificate_validity_days=90"          \
+                              --data-urlencode certificate_csr@$LE_ROOT_PATH/${CERTME_DOMAINS}/$CSR_NAME )
     echo
     echo "Response :"
     echo "$response"
@@ -46,8 +46,8 @@ request_first_zero_certificate() {
     fi
 
     # Extract challenge details
-    validation_url_http=$(echo "${response}" | jq -r '.validation.other_methods["'"${CERT_DOMAINS}"'"].file_validation_url_http')
-    validation_content=$(echo "${response}"  | jq -r '.validation.other_methods["'"${CERT_DOMAINS}"'"].file_validation_content | join("\n")')
+    validation_url_http=$(echo "${response}" | jq -r '.validation.other_methods["'"${CERTME_DOMAINS}"'"].file_validation_url_http')
+    validation_content=$(echo "${response}"  | jq -r '.validation.other_methods["'"${CERTME_DOMAINS}"'"].file_validation_content | join("\n")')
 
     echo
     echo "cert_id                    : ${cert_id}          "
@@ -81,14 +81,14 @@ request_first_zero_certificate() {
     # Call Validation - Validate certificate at ZeroSSL
     echo
     echo "Call Validation :"
-    curl -s -X POST "https://api.zerossl.com/certificates/${cert_id}/challenges?access_key=${CERT_ZEROSSL_API_KEY}" \
+    curl -s -X POST "https://api.zerossl.com/certificates/${cert_id}/challenges?access_key=${CERTME_ZEROSSL_API_KEY}" \
             -d "validation_method=HTTP_CSR_HASH" 
     
     # Wait for cert to be issued
     sleep 30
         
     # Download certificate after validation
-    local cert_response=$(curl -s -X GET "https://api.zerossl.com/certificates/${cert_id}/download/return?access_key=${CERT_ZEROSSL_API_KEY}" \
+    local cert_response=$(curl -s -X GET "https://api.zerossl.com/certificates/${cert_id}/download/return?access_key=${CERTME_ZEROSSL_API_KEY}" \
                                   -H "Content-Type: application/x-www-form-urlencoded")
 
     echo 
@@ -96,8 +96,8 @@ request_first_zero_certificate() {
     echo
 
     # Temporary paths for new certificates
-    TEMP_FULL_CHAIN="${LE_ROOT_PATH}/${CERT_DOMAINS}/temp_${FULL_CHAIN_NAME}"
-    TEMP_CHAIN="${LE_ROOT_PATH}/${CERT_DOMAINS}/temp_${CHAIN_NAME}"
+    TEMP_FULL_CHAIN="${LE_ROOT_PATH}/${CERTME_DOMAINS}/temp_${FULL_CHAIN_NAME}"
+    TEMP_CHAIN="${LE_ROOT_PATH}/${CERTME_DOMAINS}/temp_${CHAIN_NAME}"
 
     # Save the new certificate files to temporary locations
     echo "${cert_response}" | jq -r '.["certificate.crt"]' > "$TEMP_FULL_CHAIN"
@@ -109,8 +109,8 @@ request_first_zero_certificate() {
          if openssl x509 -in "$TEMP_FULL_CHAIN" -noout && openssl x509 -in "$TEMP_CHAIN" -noout; then       
               echo "✅ Success ! Certificate successfully generated and installed"
               # Move the validated certificates to their final locations
-              mv "$TEMP_FULL_CHAIN" "$LE_ROOT_PATH/${CERT_DOMAINS}/$FULL_CHAIN_NAME"
-              mv "$TEMP_CHAIN"      "$LE_ROOT_PATH/${CERT_DOMAINS}/$CHAIN_NAME"
+              mv "$TEMP_FULL_CHAIN" "$LE_ROOT_PATH/${CERTME_DOMAINS}/$FULL_CHAIN_NAME"
+              mv "$TEMP_CHAIN"      "$LE_ROOT_PATH/${CERTME_DOMAINS}/$CHAIN_NAME"
          else
               echo "❌ Error : Certificate files were not generated. Retaining existing certificates ( if available )"
               rm -rf "$TEMP_FULL_CHAIN" "$TEMP_CHAIN"
@@ -133,7 +133,7 @@ request_first_zero_certificate() {
 # Function to renew an existing certificate with ZeroSSL API
 request_renew_zero_certificate() {
     
-    echo "Renewing the certificate with ZeroSSL for IP ${CERT_DOMAINS} "
+    echo "Renewing the certificate with ZeroSSL for IP ${CERTME_DOMAINS} "
     
     # We'll just request a new certificate since ZeroSSL API doesn't have a specific renewal endpoint
     request_first_zero_certificate false # http server already started ( nginx on the port 80 )

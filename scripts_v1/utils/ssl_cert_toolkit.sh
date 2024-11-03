@@ -53,7 +53,7 @@ should_renew_certificate() {
     local cert_path="$1"
     local renewal_threshold_days="$2"
 
-    # Check if the certificate expires in less than CERT_RENEWAL_THRESHOLD_DAYS days
+    # Check if the certificate expires in less than CERTME_RENEWAL_THRESHOLD_DAYS days
     if ! openssl x509 -noout -checkend $((renewal_threshold_days * 86400)) -in "${cert_path}"; then
         return 0  # The certificate should be renewed
     else

@@ -1,4 +1,4 @@
-# nginx-certbot
+# nginx-cert
 
 ## Description
 
@@ -7,22 +7,22 @@ This project handles the creation and renewal of SSL certificates using **Certbo
 ## Features
 
 -   Generates self-signed certificates for IP addresses and `localhost`.
--   Requests certificates via Certbot for specified domains.
+-   Requests certificates via Certbot ( or REST for zeroSSL ) for specified domains.
 -   Automatically renews certificates based on a defined threshold.
 
 ## Environment Variables
 
--   `CERTME_EMAIL`: The email address to use when requesting the certificate.
--   `CERTME_DOMAINS`: A comma-separated list of domains for which the certificate is requested.
--   `CERTME_PROXY_PASS_PORT`: The port used by the Nginx proxy (default value: `8080`).
--   `CERTME_RENEWAL_THRESHOLD_DAYS`: The number of days before expiration to trigger renewal (default value: `30`).
--   `CERTME_ENABLE`: If set to `true`, the script executes the Certbot mode.
--   `CERTME_FORCE_RENEW`: If set to `true`, forces renewal of the certificate.
--   `CERTME_STAGING`: If set to `true`, uses the staging environment for testing ( default value: `true` ).
+-   `CERT_EMAIL`: The email address to use when requesting the certificate.
+-   `CERT_DOMAINS`: A comma-separated list of domains for which the certificate is requested.
+-   `CERT_PROXY_PASS_PORT`: The port used by the Nginx proxy (default value: `8080`).
+-   `CERT_RENEWAL_THRESHOLD_DAYS`: The number of days before expiration to trigger renewal (default value: `30`).
+-   `CERT_ENABLE`: If set to `true`, the script will enable the Cert mode.
+-   `CERT_FORCE_RENEW`: If set to `true`, forces renewal of the certificate.
+-   `CERT_STAGING`: If set to `true`, uses the staging environment for testing ( default value: `true` ).
 
 ## Example Nginx Configuration
 
-Here's an example Nginx configuration (`nginx.conf`) to use with the Certbot setup:
+Here's an example Nginx configuration (`nginx.conf`) to use with the Cert setup:
 
 ```
  worker_processes auto;  # Adjust based on the number of CPU cores
@@ -39,20 +39,24 @@ Here's an example Nginx configuration (`nginx.conf`) to use with the Certbot set
         listen [::]:80;
         server_name _;
      
-        ## Lets-Encrypt Configuration 
+        ## 1. Lets-Encrypt Configuration 
         location /.well-known/acme-challenge/ {
             proxy_pass http://127.0.0.1:8080;
             proxy_set_header Host $host;
             proxy_set_header X-Real-IP $remote_addr;
             proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
             proxy_set_header X-Forwarded-Proto $scheme;
-        }   
-        
-        # ZeroSSL ( for IPs Adresses )
+        }
+
+        # 2. ZeroSSL ( for IPs Adresses )
         location /.well-known/pki-validation {
             alias /var/www/html/.well-known/;  
             allow all;
         }
+
+        # Point 1 & 2 can be replaces by
+        # Inclusion for specific Let’s Encrypt and zeroSll routes
+        # include /etc/nginx/letsEncrypt_zeroSsl.conf ;
 
         # Redirection to HTTPS for all other traffic
         location / {
@@ -88,15 +92,15 @@ To use this setup with Docker Compose, you can define the environment variables 
 
 services:
   nginx:
-    image: rac021/nginx-certbot
+    image: rac021/nginx-cert
     environment:
-      - CERTME_ENABLE=true
-      - CERTME_EMAIL=your-email@example.com
-      - CERTME_DOMAINS=example.com
-      - CERTME_PROXY_PASS_PORT=8080
-      - CERTME_FORCE_RENEW=true
-      - CERTME_STAGING=false
-      - CERTME_RENEWAL_THRESHOLD_DAYS=30
+      - CERT_ENABLE=true
+      - CERT_EMAIL=your-email@example.com
+      - CERT_DOMAINS=example.com
+      - CERT_PROXY_PASS_PORT=8080
+      - CERT_FORCE_RENEW=true
+      - CERT_STAGING=false
+      - CERT_RENEWAL_THRESHOLD_DAYS=30
     ports:
       - 80:80
       - 443:443
@@ -110,17 +114,17 @@ services:
 
 ```
    docker run --rm \
-              --name nginx-certbot \
-              -e CERTME_EMAIL=your-email@example.com        \
-              -e CERTME_DOMAINS=example.com,www.example.com \
-              -e CERTME_PROXY_PASS_PORT=8080       \
-              -e CERTME_RENEWAL_THRESHOLD_DAYS=30  \
-              -e CERTME_ENABLE=true      \
-              -e CERTME_FORCE_RENEW=true \
-              -e CERTME_STAGING=false    \
+              --name nginx-cert \
+              -e CERT_EMAIL=your-email@example.com        \
+              -e CERT_DOMAINS=example.com,www.example.com \
+              -e CERT_PROXY_PASS_PORT=8080       \
+              -e CERT_RENEWAL_THRESHOLD_DAYS=30  \
+              -e CERT_ENABLE=true      \
+              -e CERT_FORCE_RENEW=true \
+              -e CERT_STAGING=false    \
               -p 80:80   \
               -p 443:443 \
-              rac021/nginx-certbot
+              rac021/nginx-cert
 ```
 
 2. ### With Docker Compose :
@@ -139,6 +143,6 @@ services:
 3. It is also possible to manually trigger a renewal with the following command :
 
 ```
-   docker exec nginx-certbot renew
+   docker exec nginx-cert renew
 ```
 4. The script will automatically request certificates and set up Nginx. Ensure to adjust the domain names and email address accordingly.

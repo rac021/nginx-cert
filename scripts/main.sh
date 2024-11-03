@@ -73,7 +73,7 @@ renew_certificate() {
                 request_renew_zero_certificate  # Function to request renewal from ZeroSSL
             else
                 echo "🔒 The ZeroSSL certificate for ${CERTME_DOMAINS} is valid for more than ${CERTME_RENEWAL_THRESHOLD_DAYS} days"
-                echo "  No renewal needed."
+                echo "   No renewal needed."
                 echo
             fi
             
@@ -84,7 +84,7 @@ renew_certificate() {
             create_self_signed_certificate "${CERTME_DOMAINS}" "$LE_ROOT_PATH" "$PRIV_KEY_NAME" "$FULL_CHAIN_NAME"
         else
             print_message "🔒 The self-signed certificate for ${CERTME_DOMAINS} is valid for more than ${CERTME_RENEWAL_THRESHOLD_DAYS} days"
-            echo "  No renewal needed."
+            echo "   No renewal needed."
         fi
     else
         # If the domain is not an IP, check if the certificate needs renewal
@@ -93,7 +93,7 @@ renew_certificate() {
             request_renew_letsencrypt_certificate  # Function to request renewal from Let's Encrypt
         else
             print_message "🔒 The certificate for ${CERTME_DOMAINS} is valid for more than ${CERTME_RENEWAL_THRESHOLD_DAYS} days."
-            echo "  No renewal needed."
+            echo "   No renewal needed."
         fi
     fi
 }

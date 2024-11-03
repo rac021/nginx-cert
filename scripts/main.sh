@@ -128,7 +128,7 @@ main_certificate_manager() {
         echo
         first_certificate  # Call to request the first certificate
     else
-        echo "📄 Certificate ${CERTME_DOMAINS} already exists for ${CERTME_DOMAINS} in $cert_path. Checking renewal status.."
+        echo "📄 Certificate already exists for ${CERTME_DOMAINS} in $cert_path. Checking renewal status.."
         echo
         renew_certificate  # Call to check and renew the certificate if needed
     fi

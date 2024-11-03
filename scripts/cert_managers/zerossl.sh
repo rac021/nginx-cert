@@ -92,7 +92,7 @@ request_first_zero_certificate() {
                                   -H "Content-Type: application/x-www-form-urlencoded")
 
     echo 
-    echo "Response : $cert_response"
+    echo "Response : ${cert_response:0:50}..."
     echo
 
     # Temporary paths for new certificates

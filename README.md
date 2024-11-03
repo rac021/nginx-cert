@@ -12,19 +12,25 @@ This project handles the creation and renewal of SSL certificates using **Certbo
 
 ## Environment Variables
 
--   `CERTBOT_EMAIL`: The email address to use when requesting the certificate.
--   `CERTBOT_DOMAINS`: A comma-separated list of domains for which the certificate is requested.
--   `NGINX_PROXY_PASS_PORT`: The port used by the Nginx proxy (default value: `8080`).
--   `RENEWAL_THRESHOLD_DAYS`: The number of days before expiration to trigger renewal (default value: `30`).
--   `RUN_CERTBOT`: If set to `true`, the script executes the Certbot mode.
--   `FORCE_RENEW`: If set to `true`, forces renewal of the certificate.
--   `STAGING`: If set to `true`, uses the staging environment for testing ( default value: `true` ).
+-   `CERTME_EMAIL`: The email address to use when requesting the certificate.
+-   `CERTME_DOMAINS`: A comma-separated list of domains for which the certificate is requested.
+-   `CERTME_PROXY_PASS_PORT`: The port used by the Nginx proxy (default value: `8080`).
+-   `CERTME_RENEWAL_THRESHOLD_DAYS`: The number of days before expiration to trigger renewal (default value: `30`).
+-   `CERTME_ENABLE`: If set to `true`, the script executes the Certbot mode.
+-   `CERTME_FORCE_RENEW`: If set to `true`, forces renewal of the certificate.
+-   `CERTME_STAGING`: If set to `true`, uses the staging environment for testing ( default value: `true` ).
 
 ## Example Nginx Configuration
 
 Here's an example Nginx configuration (`nginx.conf`) to use with the Certbot setup:
 
 ```
+ worker_processes auto;  # Adjust based on the number of CPU cores
+
+ events {
+    worker_connections 1024; # Adjust based on your needs
+ }
+
  http {
     
     # Server configuration
@@ -41,6 +47,12 @@ Here's an example Nginx configuration (`nginx.conf`) to use with the Certbot set
             proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
             proxy_set_header X-Forwarded-Proto $scheme;
         }   
+        
+        # ZeroSSL ( for IPs Adresses )
+        location /.well-known/pki-validation {
+            alias /var/www/html/.well-known/;  
+            allow all;
+        }
 
         # Redirection to HTTPS for all other traffic
         location / {
@@ -50,8 +62,11 @@ Here's an example Nginx configuration (`nginx.conf`) to use with the Certbot set
     }
     
     server {    
+        
         listen 443 ssl;
-        server_name openadom;
+        
+        server_name openAdom;
+        
         # SSL certificate
         ssl_certificate     /etc/letsencrypt/live/{DOMAIN_NAME}/fullchain.pem;
         ssl_certificate_key /etc/letsencrypt/live/{DOMAIN_NAME}/privkey.pem;
@@ -75,13 +90,13 @@ services:
   nginx:
     image: rac021/nginx-certbot
     environment:
-      - RUN_CERTBOT=true
-      - CERTBOT_EMAIL=your-email@example.com
-      - CERTBOT_DOMAINS=example.com
-      - NGINX_PROXY_PASS_PORT=8080
-      - FORCE_RENEW=true
-      - STAGING=false
-      - RENEWAL_THRESHOLD_DAYS=30
+      - CERTME_ENABLE=true
+      - CERTME_EMAIL=your-email@example.com
+      - CERTME_DOMAINS=example.com
+      - CERTME_PROXY_PASS_PORT=8080
+      - CERTME_FORCE_RENEW=true
+      - CERTME_STAGING=false
+      - CERTME_RENEWAL_THRESHOLD_DAYS=30
     ports:
       - 80:80
       - 443:443
@@ -96,13 +111,13 @@ services:
 ```
    docker run --rm \
               --name nginx-certbot \
-              -e CERTBOT_EMAIL=your-email@example.com        \
-              -e CERTBOT_DOMAINS=example.com,www.example.com \
-              -e NGINX_PROXY_PASS_PORT=8080 \
-              -e RENEWAL_THRESHOLD_DAYS=30  \
-              -e RUN_CERTBOT=true \
-              -e FORCE_RENEW=true \
-              -e STAGING=false    \
+              -e CERTME_EMAIL=your-email@example.com        \
+              -e CERTME_DOMAINS=example.com,www.example.com \
+              -e CERTME_PROXY_PASS_PORT=8080       \
+              -e CERTME_RENEWAL_THRESHOLD_DAYS=30  \
+              -e CERTME_ENABLE=true      \
+              -e CERTME_FORCE_RENEW=true \
+              -e CERTME_STAGING=false    \
               -p 80:80   \
               -p 443:443 \
               rac021/nginx-certbot

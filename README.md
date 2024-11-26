@@ -12,13 +12,14 @@ This project handles the creation and renewal of SSL certificates using **Certbo
 
 ## Environment Variables
 
--   `CERT_EMAIL`: The email address to use when requesting the certificate.
+-   `CERT_ENABLE`: If set to `true`, the script will enable the Cert mode ( default value: `false` ).
 -   `CERT_DOMAINS`: A comma-separated list of domains for which the certificate is requested.
--   `CERT_PROXY_PASS_PORT`: The port used by the Nginx proxy (default value: `8080`).
--   `CERT_RENEWAL_THRESHOLD_DAYS`: The number of days before expiration to trigger renewal (default value: `30`).
--   `CERT_ENABLE`: If set to `true`, the script will enable the Cert mode.
 -   `CERT_FORCE_RENEW`: If set to `true`, forces renewal of the certificate.
 -   `CERT_STAGING`: If set to `true`, uses the staging environment for testing ( default value: `true` ).
+-   `CERT_RENEWAL_THRESHOLD_DAYS`: The number of days before expiration to trigger renewal (default value: `30`).
+-   `CERT_EMAIL`: The email address to use when requesting the certificate.
+-   `CERT_SELF_SIGNED_CERTIFICATE`: When set to `true` and `CERT_ENABLE` is also `true`, a self-signed certificate will be generated ( default value: `false` ).
+-   `CERT_PROXY_PASS_PORT`: The port used by the Nginx proxy (default value: `8080`).
 
 ## Example Nginx Configuration
 
@@ -101,6 +102,7 @@ services:
       - CERT_FORCE_RENEW=true
       - CERT_STAGING=false
       - CERT_RENEWAL_THRESHOLD_DAYS=30
+      - CERT_SELF_SIGNED_CERTIFICATE=false
     ports:
       - 80:80
       - 443:443
@@ -117,8 +119,9 @@ services:
               --name nginx-cert \
               -e CERT_EMAIL=your-email@example.com        \
               -e CERT_DOMAINS=example.com,www.example.com \
-              -e CERT_PROXY_PASS_PORT=8080       \
-              -e CERT_RENEWAL_THRESHOLD_DAYS=30  \
+              -e CERT_SELF_SIGNED_CERTIFICATE=false \
+              -e CERT_PROXY_PASS_PORT=8080          \
+              -e CERT_RENEWAL_THRESHOLD_DAYS=30     \
               -e CERT_ENABLE=true      \
               -e CERT_FORCE_RENEW=true \
               -e CERT_STAGING=false    \

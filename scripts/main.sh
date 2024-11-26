@@ -29,6 +29,8 @@ CERT_PROXY_PASS_PORT=${CERT_PROXY_PASS_PORT:-8080}  # Default proxy port
 
 CERT_ENABLE=${CERT_ENABLE:-false}
 
+CERT_SELF_SIGNED_CERTIFICATE=${CERT_SELF_SIGNED_CERTIFICATE:-false}
+
 # Set the environment variable for the staging flag
 CERT_STAGING=${CERT_STAGING:-true}  # Default value of true
 
@@ -161,13 +163,14 @@ echo
 echo "---------------------------------------------------------------"
 echo "📋 Configuration Summary  :                                     "
 echo "---------------------------------------------------------------"
-echo " ENABLE           ( CERT_ENABLE                 ) : ${CERT_ENABLE}"      # Display if CertMe is enabled
-echo " Domains          ( CERT_DOMAINS                ) : ${CERT_DOMAINS}"     # Display domains managed by CertMe
-echo " Email            ( CERT_EMAIL                  ) : ${CERT_EMAIL}"       # Display email for CertMe notifications
-echo " Staging Mode     ( CERT_STAGING                ) : ${CERT_STAGING}"     # Display staging mode status
-echo " Force Renew      ( CERT_FORCE_RENEW            ) : ${CERT_FORCE_RENEW}" # Display if forced renewal is enabled
-echo " Nginx Proxy Port ( CERT_PROXY_PASS_PORT        ) : ${CERT_PROXY_PASS_PORT}"        # Display the port used by the Nginx proxy
-echo " Threshold Days   ( CERT_RENEWAL_THRESHOLD_DAYS ) : ${CERT_RENEWAL_THRESHOLD_DAYS}" # Display renewal threshold
+echo " ENABLE           ( CERT_ENABLE                  ) : ${CERT_ENABLE}"                  # Display if CertMe is enabled
+echo " ENABLE S_S_C     ( CERT_SELF_SIGNED_CERTIFICATE ) : ${CERT_SELF_SIGNED_CERTIFICATE}" # Display if CERT_SELF_SIGNED_CERTIFICATE is enabled
+echo " Domains          ( CERT_DOMAINS                 ) : ${CERT_DOMAINS}"                 # Display domains managed by CertMe
+echo " Email            ( CERT_EMAIL                   ) : ${CERT_EMAIL}"                   # Display email for CertMe notifications
+echo " Staging Mode     ( CERT_STAGING                 ) : ${CERT_STAGING}"                 # Display staging mode status
+echo " Force Renew      ( CERT_FORCE_RENEW             ) : ${CERT_FORCE_RENEW}"             # Display if forced renewal is enabled
+echo " Nginx Proxy Port ( CERT_PROXY_PASS_PORT         ) : ${CERT_PROXY_PASS_PORT}"         # Display the port used by the Nginx proxy
+echo " Threshold Days   ( CERT_RENEWAL_THRESHOLD_DAYS  ) : ${CERT_RENEWAL_THRESHOLD_DAYS}"  # Display renewal threshold
 
 # Display ZeroSSL configuration if environment variables are set
 if [[ -n "${CERT_ZEROSSL_API_KEY}" ]]; then
@@ -184,6 +187,15 @@ if [[ "${CERT_ENABLE}" != "true" ]]; then
     print_message "CERT_ENABLE is not set to true. Skipping CertMe setup and starting Nginx."
     start_nginx  # Function to start the Nginx server
 
+# Generate a self_signed_certificate if CERT_SELF_SIGNED_CERTIFICATE is set to true 
+elif [[ "${CERT_ENABLE}" == "true" && "$CERT_SELF_SIGNED_CERTIFICATE" == "true" ]]; then
+    
+    if [ -z "$CERT_DOMAINS" ]; then
+        CERT_DOMAINS="127.0.0.1"
+    fi
+    print_message "🌐 Generating a self-signed certificate for the domain : "
+    create_self_signed_certificate "${CERT_DOMAINS}" "$LE_ROOT_PATH" "$PRIV_KEY_NAME" "$FULL_CHAIN_NAME"
+    
 # Exit if CERT_DOMAINS is empty and CERT_ENABLE is set to true
 elif [[ "${CERT_ENABLE}" == "true" && -z "$CERT_DOMAINS" ]]; then
     

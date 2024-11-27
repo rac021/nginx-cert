@@ -33,7 +33,7 @@ RUN touch /var/run/nginx.pid && \
     chown -R nginx:nginx /var/run/nginx.pid
 
 # Switch to the nginx user to run Nginx
-USER root # nginx
+USER root
 
 # Set the entrypoint
 ENTRYPOINT ["/bin/bash", "-c", "./main.sh"]

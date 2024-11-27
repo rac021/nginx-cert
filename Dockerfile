@@ -1,7 +1,7 @@
 FROM nginx:1.27.2-alpine-slim
 
 # Install necessary packages
-RUN apk add --no-cache certbot openssl jq bash
+RUN apk add --no-cache certbot openssl jq bash curl
 
 # Set the working directory
 RUN mkdir /opt/certme

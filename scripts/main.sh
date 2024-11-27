@@ -65,8 +65,20 @@ renew_certificate() {
 
     local cert_path="$LE_ROOT_PATH/${CERT_DOMAINS}/$FULL_CHAIN_NAME"  # Path to the certificate 'fullchain.pem'
 
+    if [[ "$CERT_SELF_SIGNED_CERTIFICATE" == "true" ]]; then
+    
+            # Check if force renewal is enabled or if the certificate needs renewal
+            if [[ "${CERT_FORCE_RENEW}" == "true" ]] || should_renew_certificate "$cert_path" "$CERT_RENEWAL_THRESHOLD_DAYS"; then
+                print_message "🌐 ${CERT_DOMAINS} : Renew self-signed certificate.."
+                # Function to create self-signed certificate
+                create_self_signed_certificate "${CERT_DOMAINS}" "$LE_ROOT_PATH" "$PRIV_KEY_NAME" "$FULL_CHAIN_NAME"
+            else
+                print_message "🔒 The self-signed certificate for ${CERT_DOMAINS} is valid for more than ${CERT_RENEWAL_THRESHOLD_DAYS} days"
+                echo "   No renewal needed."
+            fi
+
     # Check if the domain is an IP address
-    if is_ip "${CERT_DOMAINS}"; then
+    elif is_ip "${CERT_DOMAINS}"; then
         # Check if ZeroSSL EAB (External Account Binding) variables are set and certificate should be renewed
         if [[ -n "${CERT_ZEROSSL_API_KEY}" ]]; then
             print_message "🔔 ZeroSSL configuration detected for IP ${CERT_DOMAINS}. Attempting ZeroSSL certificate issuance.."
@@ -102,12 +114,20 @@ renew_certificate() {
 
 # Function to request the first certificate
 first_certificate() {
+
+    if [[ "$CERT_SELF_SIGNED_CERTIFICATE" == "true" ]]; then
+    
+        # Check if force renewal is enabled or if the certificate needs renewal
+        print_message "🌐 ${CERT_DOMAINS} : Generate a self-signed certificate.."
+        # Function to create self-signed certificate
+        create_self_signed_certificate "${CERT_DOMAINS}" "$LE_ROOT_PATH" "$PRIV_KEY_NAME" "$FULL_CHAIN_NAME"
+
     # Check if CERT_DOMAINS is an IP and if ZeroSSL variables are set
-    if is_ip "${CERT_DOMAINS}"; then
+    elif is_ip "${CERT_DOMAINS}"; then
         if [[ -n "${CERT_ZEROSSL_API_KEY}" ]]; then
             request_first_zero_certificate true  # Start HTTP server on port 80 for ZeroSSL
         else
-            echo "⚠️ Missing ZeroSSL credentials. Generating a self-signed certificate for ${CERT_DOMAINS}."
+            echo "⚠️ No provided ZeroSSL credentials. Generating a self-signed certificate for ${CERT_DOMAINS}."
             # Function to create self-signed certificate
             create_self_signed_certificate "${CERT_DOMAINS}" "$LE_ROOT_PATH" "$PRIV_KEY_NAME" "$FULL_CHAIN_NAME" 
         fi
@@ -157,7 +177,15 @@ first_cert_main() {
 ##############
 ## MAIN ######
 ##############
+
+# Generate a self_signed_certificate if CERT_SELF_SIGNED_CERTIFICATE is set to true 
+if [[ "${CERT_ENABLE}" == "true" && "$CERT_SELF_SIGNED_CERTIFICATE" == "true" ]]; then
     
+    if [ -z "$CERT_DOMAINS" ]; then
+        CERT_DOMAINS="127.0.0.1"
+    fi
+fi
+
 # Display user configuration summary
 echo
 echo "---------------------------------------------------------------"
@@ -187,15 +215,6 @@ if [[ "${CERT_ENABLE}" != "true" ]]; then
     print_message "CERT_ENABLE is not set to true. Skipping CertMe setup and starting Nginx."
     start_nginx  # Function to start the Nginx server
 
-# Generate a self_signed_certificate if CERT_SELF_SIGNED_CERTIFICATE is set to true 
-elif [[ "${CERT_ENABLE}" == "true" && "$CERT_SELF_SIGNED_CERTIFICATE" == "true" ]]; then
-    
-    if [ -z "$CERT_DOMAINS" ]; then
-        CERT_DOMAINS="127.0.0.1"
-    fi
-    print_message "🌐 Generating a self-signed certificate for the domain : "
-    create_self_signed_certificate "${CERT_DOMAINS}" "$LE_ROOT_PATH" "$PRIV_KEY_NAME" "$FULL_CHAIN_NAME"
-    
 # Exit if CERT_DOMAINS is empty and CERT_ENABLE is set to true
 elif [[ "${CERT_ENABLE}" == "true" && -z "$CERT_DOMAINS" ]]; then
     

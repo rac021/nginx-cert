@@ -13,7 +13,7 @@ print_message() {
     echo "╰${border}╯"
 }
 
-# Function to check if the argument is an IP address (IPv4 only) or "localhost"
+# Function to check if the argument is an IP address (IPv4 only) or "localhost" or "127.0.0.1"
 is_ip() {
-    [[ "$1" =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}$ ]] || [ "$1" = "localhost" ]
+    [[ "$1" =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}$ ]] || [ "$1" = "localhost" ]  || [ "$1" = "127.0.0.1" ]
 }

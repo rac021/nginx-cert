@@ -178,6 +178,8 @@ first_cert_main() {
 ## MAIN ######
 ##############
 
+mkdir -p $LE_ROOT_PATH
+
 # Generate a self_signed_certificate if CERT_SELF_SIGNED_CERTIFICATE is set to true 
 if [[ "${CERT_ENABLE}" == "true" && "$CERT_SELF_SIGNED_CERTIFICATE" == "true" ]]; then
     

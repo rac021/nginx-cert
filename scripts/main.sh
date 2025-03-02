@@ -59,81 +59,112 @@ LE_ROOT_PATH="/etc/letsencrypt/live"  # Root path for Let's Encrypt certificates
 
 ###################################
 ###################################
-
 # Function to renew the certificate
 renew_certificate() {
 
     local cert_path="$LE_ROOT_PATH/${CERT_DOMAINS}/$FULL_CHAIN_NAME"  # Path to the certificate 'fullchain.pem'
-
-    if [[ "$CERT_SELF_SIGNED_CERTIFICATE" == "true" ]]; then
+    local needs_renewal=false
+    local no_renewal_msg="🔒 The certificate for ${CERT_DOMAINS} is valid for more than ${CERT_RENEWAL_THRESHOLD_DAYS} days"
     
-            # Check if force renewal is enabled or if the certificate needs renewal
-            if [[ "${CERT_FORCE_RENEW}" == "true" ]] || should_renew_certificate "$cert_path" "$CERT_RENEWAL_THRESHOLD_DAYS"; then
-                print_message "🌐 ${CERT_DOMAINS} : Renew self-signed certificate.."
-                # Function to create self-signed certificate
-                create_self_signed_certificate "${CERT_DOMAINS}" "$LE_ROOT_PATH" "$PRIV_KEY_NAME" "$FULL_CHAIN_NAME"
-            else
-                print_message "🔒 The self-signed certificate for ${CERT_DOMAINS} is valid for more than ${CERT_RENEWAL_THRESHOLD_DAYS} days"
-                echo "   No renewal needed."
-            fi
+    # Check if force renewal is enabled or if the certificate needs renewal
+    if [[ "${CERT_FORCE_RENEW}" == "true" ]] || should_renew_certificate "$cert_path" "$CERT_RENEWAL_THRESHOLD_DAYS"; then
+        needs_renewal=true
+    fi
 
-    # Check if the domain is an IP address
-    elif is_ip "${CERT_DOMAINS}"; then
-        # Check if ZeroSSL EAB (External Account Binding) variables are set and certificate should be renewed
-        if [[ -n "${CERT_ZEROSSL_API_KEY}" ]]; then
-            print_message "🔔 ZeroSSL configuration detected for IP ${CERT_DOMAINS}. Attempting ZeroSSL certificate issuance.."
-            # Renew ZeroSSL certificate if needed
-            if should_renew_certificate "$cert_path" "$CERT_RENEWAL_THRESHOLD_DAYS"; then
-                request_renew_zero_certificate  # Function to request renewal from ZeroSSL
-            else
-                echo "🔒 The ZeroSSL certificate for ${CERT_DOMAINS} is valid for more than ${CERT_RENEWAL_THRESHOLD_DAYS} days"
-                echo "   No renewal needed."
-                echo
-            fi
-            
-        # Check if force renewal is enabled or if the certificate needs renewal
-        elif [[ "${CERT_FORCE_RENEW}" == "true" ]] || should_renew_certificate "$cert_path" "$CERT_RENEWAL_THRESHOLD_DAYS"; then
-            print_message "🌐 ${CERT_DOMAINS} is an IP or localhost. Generating a self-signed certificate.."
-            # Function to create self-signed certificate
+    # Case 1: Self-signed certificate
+    if [[ "$CERT_SELF_SIGNED_CERTIFICATE" == "true" ]]; then
+        if [[ "$needs_renewal" == "true" ]]; then
+            print_message "🌐 ${CERT_DOMAINS} : Renew self-signed certificate.."
             create_self_signed_certificate "${CERT_DOMAINS}" "$LE_ROOT_PATH" "$PRIV_KEY_NAME" "$FULL_CHAIN_NAME"
         else
-            print_message "🔒 The self-signed certificate for ${CERT_DOMAINS} is valid for more than ${CERT_RENEWAL_THRESHOLD_DAYS} days"
+            print_message "$no_renewal_msg"
             echo "   No renewal needed."
         fi
-    else
-        # If the domain is not an IP, check if the certificate needs renewal
-        if [[ "${CERT_FORCE_RENEW}" == "true" ]] || should_renew_certificate "$cert_path" "$CERT_RENEWAL_THRESHOLD_DAYS"; then
-            print_message "🔔 The certificate for ${CERT_DOMAINS} needs renewal."
-            request_renew_letsencrypt_certificate  # Function to request renewal from Let's Encrypt
+        return
+    fi
+    
+    # Case 2: Localhost domain
+    if is_localhost "${CERT_DOMAINS}"; then
+        if [[ "$needs_renewal" == "true" ]]; then
+            print_message "🌐 ${CERT_DOMAINS} is a localhost! Generating a self-signed certificate.."
+            create_self_signed_certificate "${CERT_DOMAINS}" "$LE_ROOT_PATH" "$PRIV_KEY_NAME" "$FULL_CHAIN_NAME"
         else
-            print_message "🔒 The certificate for ${CERT_DOMAINS} is valid for more than ${CERT_RENEWAL_THRESHOLD_DAYS} days."
+            print_message "$no_renewal_msg"
             echo "   No renewal needed."
         fi
+        return
+    fi
+    
+    # Case 3: IP address
+    if is_ip "${CERT_DOMAINS}"; then
+        if [[ -n "${CERT_ZEROSSL_API_KEY}" ]] && [[ "$needs_renewal" == "true" ]]; then
+            print_message "🔔 ZeroSSL configuration detected for IP ${CERT_DOMAINS}. Attempting ZeroSSL certificate issuance.."
+            request_renew_zero_certificate
+        elif [[ "$needs_renewal" == "true" ]]; then
+            print_message "🌐 ${CERT_DOMAINS} is an IP address. Generating a self-signed certificate.."
+            create_self_signed_certificate "${CERT_DOMAINS}" "$LE_ROOT_PATH" "$PRIV_KEY_NAME" "$FULL_CHAIN_NAME"
+        else
+            print_message "$no_renewal_msg"
+            echo "   No renewal needed."
+        fi
+        return
+    fi
+    
+    # Case 4: Regular domain
+    if [[ -n "${CERT_ZEROSSL_API_KEY}" ]]; then
+        print_message "🔔 ZeroSSL configuration detected for the domain ${CERT_DOMAINS}."
+        if [[ "$needs_renewal" == "true" ]]; then
+            print_message "Attempting ZeroSSL certificate issuance.."
+            request_renew_zero_certificate
+        else
+            print_message "$no_renewal_msg"
+            echo "   No renewal needed."
+        fi
+    elif [[ "$needs_renewal" == "true" ]]; then
+        print_message "🔔 The certificate for ${CERT_DOMAINS} needs renewal."
+        request_renew_letsencrypt_certificate
+    else
+        print_message "$no_renewal_msg"
+        echo "   No renewal needed."
     fi
 }
 
 # Function to request the first certificate
 first_certificate() {
 
+    # Case 1: Self-signed certificate explicitly requested
     if [[ "$CERT_SELF_SIGNED_CERTIFICATE" == "true" ]]; then
-    
-        # Check if force renewal is enabled or if the certificate needs renewal
         print_message "🌐 ${CERT_DOMAINS} : Generate a self-signed certificate.."
-        # Function to create self-signed certificate
         create_self_signed_certificate "${CERT_DOMAINS}" "$LE_ROOT_PATH" "$PRIV_KEY_NAME" "$FULL_CHAIN_NAME"
-
-    # Check if CERT_DOMAINS is an IP and if ZeroSSL variables are set
-    elif is_ip "${CERT_DOMAINS}"; then
+        return
+    fi
+    
+    # Case 2: Localhost domain
+    if is_localhost "${CERT_DOMAINS}"; then
+        print_message "🌐 ${CERT_DOMAINS} is a localhost ! Generating a self-signed certificate.."
+        create_self_signed_certificate "${CERT_DOMAINS}" "$LE_ROOT_PATH" "$PRIV_KEY_NAME" "$FULL_CHAIN_NAME"
+        return
+    fi
+    
+    # Case 3: IP address
+    if is_ip "${CERT_DOMAINS}"; then
         if [[ -n "${CERT_ZEROSSL_API_KEY}" ]]; then
+            print_message "🔔 ZeroSSL configuration detected for IP ${CERT_DOMAINS}. Requesting certificate..."
             request_first_zero_certificate true  # Start HTTP server on port 80 for ZeroSSL
         else
-            echo "⚠️ No provided ZeroSSL credentials. Generating a self-signed certificate for ${CERT_DOMAINS}."
-            # Function to create self-signed certificate
-            create_self_signed_certificate "${CERT_DOMAINS}" "$LE_ROOT_PATH" "$PRIV_KEY_NAME" "$FULL_CHAIN_NAME" 
+            print_message "⚠️ No provided ZeroSSL credentials. Generating a self-signed certificate for ${CERT_DOMAINS}."
+            create_self_signed_certificate "${CERT_DOMAINS}" "$LE_ROOT_PATH" "$PRIV_KEY_NAME" "$FULL_CHAIN_NAME"
         fi
-    else
-        # If CERT_DOMAINS is not an IP, request the first certificate with Certbot
-        request_first_letsencrypt_certificate  # Function to request first certificate from Let's Encrypt
+        return
+    fi
+    
+    # Case 4: Regular domain
+    if [[ -n "${CERT_ZEROSSL_API_KEY}" ]]; then
+        print_message "🔔 ZeroSSL configuration detected for domain ${CERT_DOMAINS}. Requesting certificate..."
+        request_first_zero_certificate true  # Start HTTP server on port 80 for ZeroSSL
+    else        
+        print_message "🔔 Requesting Let's Encrypt certificate for domain ${CERT_DOMAINS}..."
+        request_first_letsencrypt_certificate
     fi
 }
 

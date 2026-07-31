@@ -232,6 +232,8 @@ ignored typo is worse than a refusal to start.
 | `CERT_FAILURE_COOLDOWN` | `30m` | Backoff after a failure; doubles on each consecutive failure. |
 | `CERT_FAILURE_COOLDOWN_MAX` | `12h` | Cap for that backoff. |
 | `CERT_POST_HOOK` | — | Shell command run after a successful renewal. `CERTME_CHANGED` lists the affected certificates. |
+| `CERT_ZEROSSL_VALIDITY_DAYS` | `90` | Requested validity, ZeroSSL REST path only (IP-address certificates). |
+| `CERT_ZEROSSL_TIMEOUT` | `5m` | How long to wait for ZeroSSL to issue, REST path only. |
 
 #### Self-signed
 
@@ -321,7 +323,8 @@ CERT_ZEROSSL_API_KEY: ${ZEROSSL_API_KEY}
 ZeroSSL's ACME endpoint does not issue certificates for IP addresses. When
 `CERT_ZEROSSL_API_KEY` is set and an IP-address certificate is requested,
 nginx-cert falls back to ZeroSSL's REST API for that one case (paid plan
-required). Let's Encrypt's `shortlived` profile is the free alternative.
+required), tunable with `CERT_ZEROSSL_VALIDITY_DAYS` and `CERT_ZEROSSL_TIMEOUT`.
+Let's Encrypt's `shortlived` profile is the free alternative.
 
 ### Buypass, Google, SSL.com
 
@@ -513,6 +516,10 @@ providers/             providers.tsv (declarative table) + acme, zerossl_rest, s
 templates/             nginx configuration templates (%%PLACEHOLDER%% syntax)
 tests/                 unit + integration
 ```
+
+[docs/architecture.md](docs/architecture.md) explains the design decisions —
+process model, boot sequence, the provider abstraction, and why certificates are
+verified before installation. Read it before changing anything structural.
 
 Migrating from version 1: see [MIGRATION.md](MIGRATION.md).
 Changes: [CHANGELOG.md](CHANGELOG.md).

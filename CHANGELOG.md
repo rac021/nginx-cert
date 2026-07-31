@@ -37,6 +37,13 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Added
 
+- Console output redesigned: a coloured badge per severity (`[ ok ]` green,
+  `[info]` blue, `[warn]` orange, `[FAIL]` red), indented `->` lines for
+  remedies, `|` for quoted third-party output, coloured section rules, and a
+  state column in `certme status` that turns red when a certificate has
+  expired. Colour is never the only carrier of meaning, and `auto` now colours
+  a pipe as well as a terminal so that `docker logs` is coloured while a
+  redirection to a file stays clean.
 - **Certum** (European CA, free tier) and **Sectigo** (commercial, and how
   InCommon members are provisioned) added to the provider table.
 - **HARICA** as a first-class provider (`CERT_PROVIDER=harica`). It is the

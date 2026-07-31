@@ -55,7 +55,7 @@ selfsigned::ensure_ca() {
   chmod 644 "$NC_CA_CRT"
 
   log::ok "Local authority ready: ${NC_CA_CRT}"
-  log::info "  Import this file into your browser or system trust store to trust development certificates."
+  log::detail info "Import this file into your browser or system trust store to trust development certificates."
 }
 
 # Common provider interface.

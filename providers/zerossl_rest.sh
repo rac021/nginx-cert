@@ -152,7 +152,7 @@ zerossl_rest::_run_validation() {
 
   if [[ $status != issued ]]; then
     log::error "ZeroSSL did not issue the certificate within the deadline (${timeout}s, last status: ${status})."
-    log::error "  -> Check that http://<your-ip>/.well-known/pki-validation/... is reachable from the internet."
+    log::detail error "Check that http://<your-ip>/.well-known/pki-validation/... is reachable from the internet."
     return 1
   fi
 

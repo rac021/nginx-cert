@@ -176,7 +176,7 @@ issue::one() {
 
   if ((${#chain[@]} == 0)); then
     log::error "'${name}': no eligible authority (kind '${NC_SPEC_KIND[$name]}', provider '${NC_SPEC_PROVIDER[$name]}')."
-    log::error "  -> Enable CERT_FALLBACK_SELFSIGNED=true or pick a compatible provider."
+    log::detail error "Enable CERT_FALLBACK_SELFSIGNED=true or pick a compatible provider."
     NC_FAILED+=("$name")
     return 1
   fi
@@ -199,7 +199,7 @@ issue::one() {
         log::error "Could not create a staging directory under ${CFG_DATA_DIR}."
         NC_FAILED+=("$name"); return 1; }
 
-      ((max_attempts > 1)) && log::info "  Attempt ${attempt}/${max_attempts} with $(issue::_provider_label "$provider")."
+      ((max_attempts > 1)) && log::detail info "Attempt ${attempt}/${max_attempts} with $(issue::_provider_label "$provider")."
 
       rc=0
       issue::_call_provider "$provider" "$name" "$staging_dir" "$force" "${domains[@]}" || rc=$?
@@ -211,11 +211,11 @@ issue::one() {
           NC_LAST_PROVIDER[$name]=$provider
           certs::record_provider "$name" "$provider"
           log::ok "'${name}' issued by $(issue::_provider_label "$provider") -- expires $(certs::not_after "$name")."
-          [[ $provider == selfsigned ]] && log::warn \
-            "  -> This certificate is NOT publicly trusted. The service is up, but browsers will warn."
+          [[ $provider == selfsigned ]] && log::detail warn \
+            "This certificate is NOT publicly trusted. The service is up, but browsers will warn."
           return 0
         fi
-        log::error "  The certificate returned by $(issue::_provider_label "$provider") failed verification and was discarded."
+        log::detail error "The certificate returned by $(issue::_provider_label "$provider") failed verification and was discarded."
         rm -rf "$staging_dir"
         rc=1
       elif ((rc == 2)); then
@@ -228,7 +228,7 @@ issue::one() {
       fi
 
       if ((attempt < max_attempts)); then
-        log::info "  Retrying in ${delay}s…"
+        log::detail info "Retrying in ${delay}s…"
         sleep "$delay"
         delay=$((delay * 2)); ((delay > 300)) && delay=300
       fi
@@ -261,12 +261,24 @@ issue::all() {
 issue::_summarize() {
   local -n _a=$1
   ((${#_a[@]} == 0)) && { printf '0'; return; }
-  printf '%d: %s' "${#_a[@]}" "${_a[*]}"
+  printf '%d  %s' "${#_a[@]}" "${_a[*]}"
 }
 
+# The closing line of a run. Counts that are zero stay grey so that a single
+# non-zero figure is what the eye lands on.
 issue::report() {
   log::section "Summary"
-  log::kv "Renewed"   "$(issue::_summarize NC_CHANGED)"
-  log::kv "Unchanged" "$(issue::_summarize NC_SKIPPED)"
-  log::kv "Failed"    "$(issue::_summarize NC_FAILED)"
+
+  local c_changed=$C_DIM c_skipped=$C_DIM c_failed=$C_DIM
+  ((${#NC_CHANGED[@]})) && c_changed=$C_GREEN
+  ((${#NC_SKIPPED[@]})) && c_skipped=''
+  ((${#NC_FAILED[@]}))  && c_failed=$C_RED
+
+  log::kv_hl 'Renewed'   "$(issue::_summarize NC_CHANGED)" "$c_changed"
+  log::kv_hl 'Unchanged' "$(issue::_summarize NC_SKIPPED)" "$c_skipped"
+  log::kv_hl 'Failed'    "$(issue::_summarize NC_FAILED)"  "$c_failed"
+
+  if ((${#NC_FAILED[@]})); then
+    log::detail warn "Run with CERT_LOG_LEVEL=debug for the full exchange with each authority."
+  fi
 }

@@ -193,7 +193,7 @@ nginx::test() {
     return 0
   fi
   log::error "Invalid nginx configuration:"
-  printf '%s\n' "$out" | while IFS= read -r l; do log::error "  | $l"; done
+  log::quote error "$out"
   return "$EX_NGINX"
 }
 

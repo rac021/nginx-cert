@@ -145,7 +145,7 @@ acme::issue() {
 
   if ((rc == 124)); then
     log::warn "$(acme::_authority_label "$provider") did not respond within $(util::human_duration "$timeout_s"): giving up on this authority."
-    log::warn "  -> Raise CERT_ACME_TIMEOUT if your link is slow."
+    log::detail warn "Raise CERT_ACME_TIMEOUT if your link is slow."
     return 1
   fi
 
@@ -211,14 +211,14 @@ acme::_explain_failure() {
       hint="The ACME server is unreachable from the container (egress network or DNS)." ;;
   esac
 
-  [[ -n $hint ]] && log::warn "  -> ${hint}"
+  [[ -n $hint ]] && log::detail warn "$hint"
 
   # The full trace stays available without polluting the nominal output.
   if log::enabled debug; then
     log::debug "$out"
   else
-    log::warn "  -> Full trace: ${CFG_ACME_HOME}/acme.log (or CERT_LOG_LEVEL=debug)."
-    printf '%s\n' "$out" | tail -n 12 | while IFS= read -r l; do log::warn "  | $(log::redact "$l")"; done
+    log::detail warn "Full trace: ${CFG_ACME_HOME}/acme.log (or CERT_LOG_LEVEL=debug)."
+    log::quote warn "$(printf '%s\n' "$out" | tail -n 12)"
   fi
 }
 

@@ -93,7 +93,7 @@ bootstrap::_warn_if_not_persistent() {
   dev_root=$(stat -c '%d' / 2>/dev/null || printf 'y')
   if [[ $dev_data == "$dev_root" ]]; then
     log::warn "${CFG_DATA_DIR} is not a volume: certificates and the account key will be lost when the container is recreated."
-    log::warn "  -> Add 'volumes: [ nginx-cert-data:/data ]' to your docker-compose.yml."
+    log::detail warn "Add 'volumes: [ nginx-cert-data:/data ]' to your docker-compose.yml."
   else
     : >"${CFG_DATA_DIR}/.persistent" 2>/dev/null || true
   fi

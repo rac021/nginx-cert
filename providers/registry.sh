@@ -108,7 +108,7 @@ provider::resolve_eab() {
   fi
 
   log::error "$(provider::label "$id") requires External Account Binding: set CERT_EAB_KID and CERT_EAB_HMAC_KEY."
-  log::error "  -> $(provider::notes "$id")"
+  log::detail error "$(provider::notes "$id")"
   return 1
 }
 
@@ -213,7 +213,7 @@ provider::chain_for() {
         skipped+=("${id} (${reason})")
       else
         log::warn "CERT_PROVIDER=${requested} was skipped because ${reason}."
-        log::warn "  -> $(provider::notes "$id")"
+        log::detail warn "$(provider::notes "$id")"
       fi
       continue
     fi

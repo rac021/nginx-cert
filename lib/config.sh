@@ -153,7 +153,7 @@ config::warn_unknown_vars() {
   while IFS= read -r name; do
     if [[ -n ${NC_REMOVED_CERT_VARS[$name]:-} ]]; then
       log::warn "${name} is no longer supported and is being ignored."
-      log::warn "  -> ${NC_REMOVED_CERT_VARS[$name]}"
+      log::detail warn "${NC_REMOVED_CERT_VARS[$name]}"
       continue
     fi
     known=0
@@ -163,7 +163,7 @@ config::warn_unknown_vars() {
 
   if ((${#unknown[@]})); then
     log::warn "Unknown variable(s), ignored: ${unknown[*]}"
-    log::warn "  -> Check the spelling; 'certme config' lists what is actually in effect."
+    log::detail warn "Check the spelling; 'certme config' lists what is actually in effect."
   fi
   return 0
 }
@@ -341,11 +341,21 @@ config::validate() {
 # --- Presentation ----------------------------------------------------------
 config::summary() {
   log::section "Effective configuration"
-  log::kv "Certificate management" "$(util::is_true "$CFG_ENABLE" && printf 'enabled' || printf 'disabled')"
-  log::kv "Provider"               "$CFG_PROVIDER$( [[ $CFG_PROVIDER == auto ]] && printf ' -> %s -> selfsigned' "$CFG_PROVIDER_CHAIN")"
+  if util::is_true "$CFG_ENABLE"; then
+    log::kv_hl "Certificate management" 'enabled'  "$C_GREEN"
+  else
+    log::kv_hl "Certificate management" 'disabled' "$C_ORANGE"
+  fi
+  log::kv_hl "Provider" "$CFG_PROVIDER$( [[ $CFG_PROVIDER == auto ]] && printf ' -> %s -> selfsigned' "$CFG_PROVIDER_CHAIN")"
   log::kv "Attempts per authority" "$CFG_ATTEMPTS (initial delay ${CFG_RETRY_DELAY}s, doubled each retry)"
   log::kv "Self-signed fallback"   "$CFG_FALLBACK_SELFSIGNED"
-  log::kv "Staging environment"    "$CFG_STAGING"
+  # Staging is the single setting most likely to be forgotten: it yields
+  # certificates no browser trusts, and everything else looks like success.
+  if util::is_true "$CFG_STAGING"; then
+    log::kv_hl "Staging environment" 'true -- certificates will NOT be publicly trusted' "$C_ORANGE"
+  else
+    log::kv "Staging environment" 'false'
+  fi
   log::kv "Account e-mail"         "${CFG_EMAIL:-(unset)}"
   log::kv "Key type"               "$CFG_KEY_TYPE"
   log::kv "Renewal"                "at D-${CFG_RENEW_DAYS} before expiry, checked every $(util::human_duration "$CFG_RENEW_INTERVAL_S") (+/-$(util::human_duration "$CFG_RENEW_JITTER_S"))"

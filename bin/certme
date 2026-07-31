@@ -128,30 +128,54 @@ cmd::status() {
     return 0
   fi
 
-  ((${#NC_SPEC_NAMES[@]} == 0)) && { printf 'No certificate declared.\n'; return 0; }
+  if ((${#NC_SPEC_NAMES[@]} == 0)); then
+    printf '%sNo certificate declared.%s\n' "$C_DIM" "$C_RESET"
+    return 0
+  fi
 
-  # ASCII-only headers: printf pads by bytes, not by display columns, so an
-  # accented character would shift the whole column.
-  printf '%-28s %-13s %-26s %-9s %s\n' 'CERTIFICATE' 'STATE' 'AUTHORITY' 'EXPIRES' 'DOMAINS'
-  printf '%s\n' "$(printf -- '-%.0s' $(seq 1 110))"
+  # Pad first, colour second. Escape sequences carry no display width, so a
+  # printf field width applied to an already-coloured string counts the escape
+  # bytes and shifts every following column.
+  local fmt='%-28s %s %-26s %-9s %s\n'
+  printf "$C_BOLD$fmt$C_RESET" 'CERTIFICATE' 'STATE        ' 'AUTHORITY' 'EXPIRES' 'DOMAINS'
+  printf '%s%s%s\n' "$C_DIM" "$(printf -- '-%.0s' $(seq 1 92))" "$C_RESET"
 
-  local name state issuer days reason
+  local name state color issuer days reason padded
   for name in "${NC_SPEC_NAMES[@]}"; do
     if ! certs::exists "$name"; then
-      printf '%-28s %-13s %-26s %-9s %s\n' "$name" 'missing' '-' '-' "${NC_SPEC_DOMAINS[$name]}"
+      printf -v padded '%-13s' 'missing'
+      printf "$fmt" "$name" "${C_RED}${padded}${C_RESET}" '-' '-' "${NC_SPEC_DOMAINS[$name]}"
       continue
     fi
     days=$(certs::days_left "$name")
     issuer=$(certs::issuer "$name" | sed -n 's/.*CN *= *\([^,/]*\).*/\1/p'); issuer=${issuer:-unknown}
     reason=$(certs::renewal_reason "$name")
-    if ((days < 0));                   then state='EXPIRED'
-    elif certs::is_selfsigned "$name"; then state='local'
-    elif [[ -n $reason ]];             then state='renew due'
-    else                                    state='valid'
+
+    if ((days < 0));                   then state='EXPIRED';      color=$C_RED
+    elif certs::is_selfsigned "$name"; then state='local';        color=$C_ORANGE
+    elif [[ -n $reason ]];             then state='renew due';    color=$C_YELLOW
+    else                                    state='valid';        color=$C_GREEN
     fi
-    printf '%-28s %-13s %-26s %-9s %s\n' \
-      "$name" "$state" "${issuer:0:26}" "D-${days}" "${NC_SPEC_DOMAINS[$name]}"
+
+    printf -v padded '%-13s' "$state"
+    printf "$fmt" "$name" "${color}${padded}${C_RESET}" "${issuer:0:26}" "D-${days}" "${NC_SPEC_DOMAINS[$name]}"
   done
+
+  # A legend only where it earns its place: when something is not simply fine.
+  local warn_local=0 warn_due=0
+  for name in "${NC_SPEC_NAMES[@]}"; do
+    certs::exists "$name" || continue
+    certs::is_selfsigned "$name" && warn_local=1
+    [[ -n $(certs::renewal_reason "$name") ]] && warn_due=1
+  done
+  if ((warn_local)); then
+    printf '\n%s%slocal%s%s = signed by this container, not publicly trusted; a real authority replaces it as soon as one succeeds.%s\n' \
+      "$C_DIM" "$C_ORANGE" "$C_RESET" "$C_DIM" "$C_RESET"
+  fi
+  if ((warn_due)); then
+    printf '%s%srenew due%s%s = will be renewed at the next check, or now with: certme renew%s\n' \
+      "$C_DIM" "$C_YELLOW" "$C_RESET" "$C_DIM" "$C_RESET"
+  fi
 }
 
 cmd::list() {
@@ -163,18 +187,31 @@ cmd::list() {
 }
 
 cmd::providers() {
-  printf '%-22s %-26s %-9s %-22s %s\n' 'ID' 'AUTHORITY' 'EAB' 'ACCEPTED KINDS' 'USABLE HERE'
-  printf '%s\n' "$(printf -- '-%.0s' $(seq 1 110))"
-  local id eab avail
+  local fmt='%-22s %-26s %-9s %-22s %s\n'
+  printf "$C_BOLD$fmt$C_RESET" 'ID' 'AUTHORITY' 'EAB' 'ACCEPTED KINDS' 'USABLE HERE'
+  printf '%s%s%s\n' "$C_DIM" "$(printf -- '-%.0s' $(seq 1 92))" "$C_RESET"
+
+  local id eab avail color
   while IFS= read -r id; do
     if provider::needs_eab "$id"; then eab='required'; else eab='no'; fi
-    if provider::eab_available "$id"; then avail='yes'; else avail='no -- EAB credentials missing'; fi
-    printf '%-22s %-26s %-9s %-22s %s\n' \
-      "$id" "$(provider::label "$id")" "$eab" "${NC_PROVIDER_CAPS[$id]}" "$avail"
+    if provider::eab_available "$id"; then
+      avail='yes'; color=$C_GREEN
+    else
+      avail='no -- EAB credentials missing'; color=$C_DIM
+    fi
+    local label; label=$(provider::label "$id")
+    printf "$fmt" "$id" "${label:0:26}" "$eab" "${NC_PROVIDER_CAPS[$id]}" "${color}${avail}${C_RESET}"
   done < <(provider::list_ids)
-  printf '%-22s %-26s %-9s %-22s %s\n' 'selfsigned' 'Local authority' 'no' 'all' 'yes (last resort)'
-  printf '%-22s %-26s %-9s %-22s %s\n' 'zerossl-rest' 'ZeroSSL (REST API)' 'no' 'ip' \
-    "$(zerossl_rest::available && printf 'yes' || printf 'no -- CERT_ZEROSSL_API_KEY unset')"
+
+  printf "$fmt" 'selfsigned' 'Local authority' 'no' 'all' "${C_ORANGE}yes (last resort)${C_RESET}"
+  if zerossl_rest::available; then
+    printf "$fmt" 'zerossl-rest' 'ZeroSSL (REST API)' 'no' 'ip' "${C_GREEN}yes${C_RESET}"
+  else
+    printf "$fmt" 'zerossl-rest' 'ZeroSSL (REST API)' 'no' 'ip' "${C_DIM}no -- CERT_ZEROSSL_API_KEY unset${C_RESET}"
+  fi
+
+  printf '\n%sPin one with CERT_PROVIDER, or set the order tried in auto mode with CERT_PROVIDER_CHAIN.%s\n' \
+    "$C_DIM" "$C_RESET"
 }
 
 cmd::version() {

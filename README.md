@@ -453,7 +453,7 @@ server blocks in `/etc/nginx/conf.d/`, or `CERT_MANAGE_NGINX=false` to own
 | `CERT_WEBROOT` | `/var/www/acme` | Directory serving the ACME challenge. |
 | `CERT_LOG_LEVEL` | `info` | `debug`, `info`, `warn`, `error`. |
 | `CERT_LOG_FORMAT` | `text` | `text` or `json`. |
-| `CERT_LOG_COLOR` | `auto` | `auto`, `always`, `never`. |
+| `CERT_LOG_COLOR` | `auto` | `auto` colours a terminal and a pipe (so `docker logs` is coloured) but never a file. `never` for log aggregators that do not strip escape codes; JSON output is never coloured. |
 
 ---
 
@@ -1356,8 +1356,27 @@ authority's rate limit. nginx-cert warns at startup if `/data` is not a volume.
 if nginx stops answering or if a certificate has expired.
 
 **Logs.** Everything goes to the container's standard error, timestamped and
-levelled. `CERT_LOG_FORMAT=json` for log aggregators. Secrets are never printed:
-EAB keys and API keys are registered and masked in every message.
+levelled, with a badge per severity:
+
+```
+[ ok ]  green    something succeeded
+[info]  blue     progress
+[warn]  orange   works, but not as you may expect -- read it
+[FAIL]  red      this did not happen
+[dbg ]  grey     only with CERT_LOG_LEVEL=debug
+->      indented remedy or explanation, attached to the line above
+|       quoted output from another program, never ours
+```
+
+Colour is never the only carrier of meaning: each severity also has its own
+badge, so the output stays readable in a file, in a pipeline, and for anyone who
+does not distinguish red from green. `auto` colours a terminal and a pipe --
+which is what `docker logs` reads from -- but never a regular file, so a
+redirection stays clean. Use `CERT_LOG_COLOR=never` for an aggregator that does
+not strip escape codes, or `CERT_LOG_FORMAT=json`, which is never coloured.
+
+Secrets are never printed: EAB keys and API keys are registered and masked in
+every message, including command traces at debug level.
 
 **Rate limits.** Let's Encrypt allows 5 duplicate certificates per week. After a
 failure nginx-cert waits `CERT_FAILURE_COOLDOWN` (doubling, capped at

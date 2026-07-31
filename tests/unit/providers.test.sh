@@ -46,7 +46,12 @@ test_declares_which_authorities_require_eab() {
   assert_ok    provider::needs_eab actalis
   assert_ok    provider::needs_eab zerossl
   assert_ok    provider::needs_eab google
+  assert_ok    provider::needs_eab certum
+  assert_ok    provider::needs_eab sectigo
   assert_fails provider::needs_eab letsencrypt
+  # SSL.com's directory advertises externalAccountRequired:false. Declaring it
+  # "required" removed it from every chain for anyone without EAB credentials.
+  assert_fails provider::needs_eab sslcom
 }
 
 test_declares_accepted_name_kinds() {
@@ -195,4 +200,40 @@ test_letsencrypt_and_zerossl_remain_first_class() {
   # Default chain unchanged, Let's Encrypt still first.
   assert_eq 'letsencrypt,zerossl,actalis,google' "$CFG_PROVIDER_CHAIN"
   assert_contains "$(_chain auto fqdn)" 'letsencrypt'
+}
+
+test_certum_is_declared_as_a_european_authority() {
+  _reset_providers
+  assert_ok provider::exists certum
+  assert_eq 'https://acme.certum.pl/directory' "$(provider::directory certum)"
+  # No acme.sh alias: the raw URL is passed.
+  assert_eq 'https://acme.certum.pl/directory' "$(provider::server_arg certum)"
+  # Free tier is one domain plus www, so no wildcard.
+  assert_fails provider::supports certum wildcard
+}
+
+# Skipping one candidate of an automatic chain is routine and stays at debug
+# level. Skipping the provider the operator explicitly named must be loud:
+# otherwise the run silently ends on a self-signed certificate.
+test_warns_when_a_pinned_provider_is_skipped() {
+  _reset_providers
+  local out
+  out=$( NC_LOG_LEVEL=warn provider::chain_for actalis wildcard false 2>&1 >/dev/null )
+  assert_contains "$out" 'CERT_PROVIDER=actalis was skipped'
+  assert_contains "$out" "does not issue 'wildcard'"
+}
+
+test_warns_when_a_pinned_provider_lacks_eab() {
+  _reset_providers
+  local out
+  out=$( NC_LOG_LEVEL=warn provider::chain_for actalis fqdn false 2>&1 >/dev/null )
+  assert_contains "$out" 'CERT_PROVIDER=actalis was skipped'
+  assert_contains "$out" 'EAB credentials are missing'
+}
+
+test_an_automatic_chain_stays_quiet_about_skipped_candidates() {
+  _reset_providers
+  local out
+  out=$( NC_LOG_LEVEL=warn provider::chain_for auto fqdn false 2>&1 >/dev/null )
+  assert_not_contains "$out" 'was skipped'
 }

@@ -17,6 +17,16 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   `letsencrypt` — the documented way — meant the server answered
   `externalAccountRequired`. Explicit credentials now always win, and the
   authority is named by the host actually contacted.
+- SSL.com was declared as requiring EAB, which silently removed it from every
+  chain. Its directory advertises `externalAccountRequired: false`; an account
+  with a billing profile is what it actually needs, and the notes now say so.
+- A provider named explicitly in `CERT_PROVIDER` that gets filtered out of the
+  chain -- wrong name kind, missing EAB -- is now reported as a warning rather
+  than at debug level. The run otherwise ended on a self-signed certificate
+  with no visible reason.
+- Failure hints told operators to check their firewall when an authority had in
+  fact refused to create the ACME account. The two share the `unauthorized`
+  code and share no remedy.
 - Buypass Go SSL removed from the provider table: it stopped issuing in October
   2025 and shut its ACME service down on 15 April 2026. Leaving it in the
   default chain cost every `auto` run a ~100 s connection timeout before moving
@@ -27,6 +37,8 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Added
 
+- **Certum** (European CA, free tier) and **Sectigo** (commercial, and how
+  InCommon members are provisioned) added to the provider table.
 - **HARICA** as a first-class provider (`CERT_PROVIDER=harica`). It is the
   authority behind GÉANT TCS, so certificates are free for members of the
   European research networks (RENATER, SURF, DFN, Belnet). On a filtered

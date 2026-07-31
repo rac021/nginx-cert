@@ -3,7 +3,7 @@
 nginx with automatic TLS certificates. One container, one variable, HTTPS.
 
 Certificates are issued and renewed automatically from **Let's Encrypt, ZeroSSL,
-Actalis, Google Trust Services, HARICA or SSL.com** — all through one ACME
+Actalis, Google Trust Services, HARICA, Certum, Sectigo or SSL.com** — all through one ACME
 driver. If an authority is unavailable, the next one in the chain is tried, and
 a locally-signed certificate takes over as a last resort so your service is
 never down because of a certificate.
@@ -380,7 +380,7 @@ server blocks in `/etc/nginx/conf.d/`, or `CERT_MANAGE_NGINX=false` to own
 
 | Variable | Default | Description |
 |---|---|---|
-| `CERT_PROVIDER` | `auto` | `auto`, or one of `letsencrypt`, `zerossl`, `actalis`, `google`, `harica`, `sslcom`, `selfsigned`. |
+| `CERT_PROVIDER` | `auto` | `auto`, or one of `letsencrypt`, `zerossl`, `actalis`, `google`, `harica`, `certum`, `sectigo`, `sslcom`, `selfsigned`. |
 | `CERT_PROVIDER_CHAIN` | `letsencrypt,zerossl,actalis,google` | Order tried in `auto` mode. |
 | `CERT_ATTEMPTS` | `2` | Attempts per authority before moving to the next one. |
 | `CERT_RETRY_DELAY` | `15` | Initial delay in seconds between attempts (doubles, capped at 300). |
@@ -469,7 +469,9 @@ only in which credentials you need. `certme providers` prints the table with a
 | ZeroSSL | `zerossl` | required | yes (DNS-01) | REST path only | 90 days | free tier |
 | Actalis | `actalis` | required | no | no | 90 days | free tier |
 | Google Trust Services | `google` | required | yes (DNS-01) | no | 90 days | free tier |
-| SSL.com | `sslcom` | required | yes (DNS-01) | no | 90 days | account |
+| Certum | `certum` | required | no | no | 90 days | free tier (EU) |
+| Sectigo | `sectigo` | required | yes (DNS-01) | no | varies | commercial |
+| SSL.com | `sslcom` | no | yes (DNS-01) | no | 90 days | account + billing profile |
 | HARICA (GÉANT TCS) | `harica` | required | yes (DNS-01) | no | 1 year | free for members |
 | Local CA | `selfsigned` | — | yes | yes | 365 days | — |
 

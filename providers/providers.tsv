@@ -26,4 +26,6 @@ actalis	Actalis	actalis	https://acme-api.actalis.com/acme/directory	required	-	f
 google	Google Trust Services	google	https://dv.acme-v02.api.pki.goog/directory	required	google-staging	fqdn,wildcard	EAB required, generated from the Google Cloud console (Public CA).
 google-staging	Google Trust Services (staging)	googletest	https://dv.acme-v02.test-api.pki.goog/directory	required	-	fqdn,wildcard	Google staging environment.
 harica	HARICA	-	https://acme-v02.harica.gr/acme/directory	required	-	fqdn,wildcard	EAB required, created at cm.harica.gr. Free for GEANT TCS members (RENATER, SURF, DFN, Belnet...). If HARICA gave you a per-organisation directory URL, set it with CERT_ACME_SERVER.
-sslcom	SSL.com	sslcom	https://acme.ssl.com/sslcom-dv-ecc	required	-	fqdn,wildcard	EAB required, obtained from the SSL.com customer portal.
+certum	Certum	-	https://acme.certum.pl/directory	required	-	fqdn	European CA (Poland). Free tier: one domain plus www, 90 days. EAB from the Certum customer panel.
+sectigo	Sectigo	-	https://acme.sectigo.com/v2/DV	required	-	fqdn,wildcard	Commercial. EAB from Sectigo Certificate Manager -- also how InCommon members and some GEANT TCS tenants are provisioned.
+sslcom	SSL.com	sslcom	https://acme.ssl.com/sslcom-dv-ecc	no	-	fqdn,wildcard	Free 90-day DV, no EAB. Requires an SSL.com account with a billing profile before ACME issuance is enabled -- registration is refused until then.

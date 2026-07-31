@@ -198,12 +198,23 @@ provider::chain_for() {
         "CERT_STAGING is on but $(provider::label "$prod") has no staging environment: issuance will hit production."
     fi
 
+    local reason=''
     if [[ $cap == none ]] || ! provider::supports "$id" "$cap"; then
-      skipped+=("${id} (does not issue '${kind}' certificates)")
-      continue
+      reason="it does not issue '${kind}' certificates"
+    elif ! provider::eab_available "$id"; then
+      reason="its EAB credentials are missing (CERT_EAB_KID / CERT_EAB_HMAC_KEY)"
     fi
-    if ! provider::eab_available "$id"; then
-      skipped+=("${id} (EAB credentials missing)")
+
+    if [[ -n $reason ]]; then
+      # Skipping one candidate of an automatic chain is routine. Skipping the
+      # provider the operator explicitly asked for is not: without a warning
+      # the run ends on a self-signed certificate with no visible reason.
+      if [[ $requested == auto ]]; then
+        skipped+=("${id} (${reason})")
+      else
+        log::warn "CERT_PROVIDER=${requested} was skipped because ${reason}."
+        log::warn "  -> $(provider::notes "$id")"
+      fi
       continue
     fi
     out+=("$id")

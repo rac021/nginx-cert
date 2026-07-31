@@ -85,3 +85,21 @@ test_stays_quiet_on_an_unrecognised_error() {
   assert_not_contains "$out" 'Quota reached'
   assert_contains     "$out" 'Full trace'
 }
+
+# "unauthorized" at account registration and "unauthorized" at challenge
+# validation share a code but nothing else. Sending someone to inspect their
+# firewall when the authority wants them to finish creating an account wastes
+# an afternoon.
+test_separates_a_registration_refusal_from_a_validation_failure() {
+  local out
+  out=$(_hint_for 'Account registration error: {"type":"urn:ietf:params:acme:error:unauthorized","detail":"Visit https://secure.ssl.com/billing_profiles to add your billing information"}' sslcom)
+  assert_contains     "$out" 'refused to create the ACME account'
+  assert_contains     "$out" 'not a validation problem'
+  assert_not_contains "$out" 'port 80'
+}
+
+test_still_points_at_the_network_for_a_validation_failure() {
+  local out
+  out=$(_hint_for 'preprod.example.com: Invalid status. Verification error details: urn:ietf:params:acme:error:unauthorized')
+  assert_contains "$out" 'port 80'
+}

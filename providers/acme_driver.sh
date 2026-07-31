@@ -192,6 +192,13 @@ acme::_explain_failure() {
   If that hangs while a plain curl returns 404, the appliance is matching the authority's User-Agent. Three ways out: have /.well-known/acme-challenge/ exempted from inspection, try another authority (such a rule is usually specific to one), or use CERT_CHALLENGE=dns-01, which needs no inbound connection at all." ;;
     *'Connection refused'*|*'connection timed out'*|*'Timeout during connect'*)
       hint="Nothing accepted the connection on port 80. Publish it (-p 80:80), and make sure no upstream firewall drops it. The authority always validates over port 80, even for an HTTPS-only site." ;;
+    # "unauthorized" means two entirely different things depending on the stage
+    # it comes from, and the remedies have nothing in common. Registration
+    # errors must therefore be matched first: pointing someone at their
+    # firewall when the authority is asking them to finish creating an account
+    # sends them hunting in the wrong place.
+    *'Account registration error'*|*'Register account Error'*)
+      hint="$(acme::_authority_label "$provider") refused to create the ACME account -- this is not a validation problem. Most authorities require an account, and some also a billing profile, before ACME issuance is enabled. Read the authority's own message just below: it usually states exactly what is missing." ;;
     *'urn:ietf:params:acme:error:unauthorized'*|*'Invalid response from'*|*'404'*)
       hint="HTTP-01 validation failed: port 80 must be reachable from the internet and routed to this container. Check the domain's DNS, that port 80 is published, and any firewall." ;;
     *'externalAccountRequired'*|*'external account binding'*)

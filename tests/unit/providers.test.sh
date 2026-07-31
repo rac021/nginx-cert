@@ -128,3 +128,41 @@ test_no_public_authority_for_an_internal_name() {
   assert_eq 'selfsigned ' "$(_chain auto internal)"
   assert_eq 'selfsigned ' "$(_chain auto localhost)"
 }
+
+# --- CERT_ACME_SERVER as an escape hatch -----------------------------------
+#
+# With the directory overridden, the table entry is only a carrier: what it
+# says about EAB describes a server we are not talking to. Getting this wrong
+# silently dropped the credentials and the real server answered
+# "externalAccountRequired".
+
+test_explicit_eab_credentials_win_over_the_table() {
+  _reset_providers
+  CFG_EAB_KID='kid-from-harica'; CFG_EAB_HMAC_KEY='hmac-from-harica'
+  CFG_ACME_SERVER='https://acme-v02.harica.gr/acme/uuid/directory'
+
+  # Called directly, not through assert_ok: that helper runs the command in a
+  # subshell, where the variables it sets would be lost.
+  NC_EAB_KID=''; NC_EAB_HMAC=''
+  provider::resolve_eab letsencrypt
+  # letsencrypt is declared "eab: no", yet the credentials must be forwarded.
+  assert_eq 'kid-from-harica'  "$NC_EAB_KID"
+  assert_eq 'hmac-from-harica' "$NC_EAB_HMAC"
+}
+
+test_no_eab_is_sent_when_none_is_configured() {
+  _reset_providers
+  CFG_ACME_SERVER=''
+  NC_EAB_KID='stale'; NC_EAB_HMAC='stale'
+  provider::resolve_eab letsencrypt
+  assert_eq '' "$NC_EAB_KID"
+  assert_eq '' "$NC_EAB_HMAC"
+}
+
+test_an_overridden_directory_is_named_by_its_host() {
+  _reset_providers
+  CFG_ACME_SERVER='https://acme-v02.harica.gr/acme/uuid/directory'
+  assert_eq 'the ACME server at acme-v02.harica.gr' "$(acme::_authority_label letsencrypt)"
+  CFG_ACME_SERVER=''
+  assert_eq "Let's Encrypt" "$(acme::_authority_label letsencrypt)"
+}

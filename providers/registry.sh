@@ -86,13 +86,21 @@ provider::eab_available() {
 provider::resolve_eab() {
   local id=$1
   NC_EAB_KID=''; NC_EAB_HMAC=''
-  provider::needs_eab "$id" || return 0
 
+  # Explicitly supplied credentials always win, whatever the table says.
+  #
+  # This is not a nicety: with CERT_ACME_SERVER pointing at another directory,
+  # the table entry is only a carrier and its "eab: no" describes a server we
+  # are not talking to. Consulting the table first meant the credentials were
+  # silently dropped and the real server answered "externalAccountRequired".
+  # A server that does not need an EAB ignores one that is sent.
   if [[ -n ${CFG_EAB_KID:-} && -n ${CFG_EAB_HMAC_KEY:-} ]]; then
     NC_EAB_KID=$CFG_EAB_KID
     NC_EAB_HMAC=$CFG_EAB_HMAC_KEY
     return 0
   fi
+
+  provider::needs_eab "$id" || return 0
 
   if [[ $id == zerossl && -n ${CFG_ZEROSSL_API_KEY:-} ]]; then
     provider::_zerossl_eab && return 0

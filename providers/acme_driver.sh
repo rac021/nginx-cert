@@ -18,6 +18,21 @@ readonly ACME_RENEW_SKIP=2
 
 acme::available() { [[ -x $NC_ACME_BIN ]]; }
 
+# How to name the authority in messages.
+#
+# When CERT_ACME_SERVER overrides the directory, the provider id is only a
+# carrier: reporting "Let's Encrypt failed" while talking to an institutional
+# or private CA is actively misleading, and so is quoting that provider's notes
+# as advice.
+acme::_authority_label() {
+  if [[ -n ${CFG_ACME_SERVER:-} ]]; then
+    local host=${CFG_ACME_SERVER#*://}; host=${host%%/*}
+    printf 'the ACME server at %s' "$host"
+    return
+  fi
+  provider::label "$1"
+}
+
 acme::version() {
   acme::available || { printf 'absent'; return 1; }
   "$NC_ACME_BIN" --version 2>/dev/null | tail -n1
@@ -113,7 +128,7 @@ acme::issue() {
     cmd+=(${extra[@]+"${extra[@]}"})
   fi
 
-  log::info "-> $(provider::label "$provider"): requesting a certificate for ${domains[*]} (${challenge} challenge${profile:+, ${profile} profile})."
+  log::info "-> $(acme::_authority_label "$provider"): requesting a certificate for ${domains[*]} (${challenge} challenge${profile:+, ${profile} profile})."
   log::debug "Command: $(log::redact "${cmd[*]}")"
 
   # --- Execution ----------------------------------------------------------
@@ -129,23 +144,23 @@ acme::issue() {
   out=$(timeout "$timeout_s" "${cmd[@]}" 2>&1) || rc=$?
 
   if ((rc == 124)); then
-    log::warn "$(provider::label "$provider") did not respond within $(util::human_duration "$timeout_s"): giving up on this authority."
+    log::warn "$(acme::_authority_label "$provider") did not respond within $(util::human_duration "$timeout_s"): giving up on this authority."
     log::warn "  -> Raise CERT_ACME_TIMEOUT if your link is slow."
     return 1
   fi
 
   if ((rc == 0)); then
-    log::ok "$(provider::label "$provider") issued certificate '${name}'."
+    log::ok "$(acme::_authority_label "$provider") issued certificate '${name}'."
     log::debug "$out"
     return 0
   fi
 
   if ((rc == ACME_RENEW_SKIP)); then
-    log::info "'${name}': certificate still valid at $(provider::label "$provider"), nothing to do."
+    log::info "'${name}': certificate still valid at $(acme::_authority_label "$provider"), nothing to do."
     return "$ACME_RENEW_SKIP"
   fi
 
-  log::warn "$(provider::label "$provider") failed for '${name}' (exit ${rc})."
+  log::warn "$(acme::_authority_label "$provider") failed for '${name}' (exit ${rc})."
   acme::_explain_failure "$provider" "$out"
   return 1
 }
@@ -159,11 +174,11 @@ acme::_explain_failure() {
 
   case $out in
     *'invalidContact'*|*'forbidden domain'*)
-      hint="CERT_EMAIL was rejected by $(provider::label "$provider"). Reserved example domains (example.com, test, ...) are refused: use a real address." ;;
+      hint="CERT_EMAIL was rejected by $(acme::_authority_label "$provider"). Reserved example domains (example.com, test, ...) are refused: use a real address." ;;
     *'Cannot init API'*|*'Can not init api'*)
-      hint="$(provider::label "$provider")'s ACME directory is unreachable from this container (egress, DNS, or the service is down)." ;;
+      hint="$(acme::_authority_label "$provider")'s ACME directory is unreachable from this container (egress, DNS, or the service is down)." ;;
     *'rateLimited'*|*'too many certificates'*|*'Rate Limit'*)
-      hint="Quota reached at $(provider::label "$provider"). Wait for the reset window, or set CERT_STAGING=true while testing." ;;
+      hint="Quota reached at $(acme::_authority_label "$provider"). Wait for the reset window, or set CERT_STAGING=true while testing." ;;
     # A reset is very different from a refused connection: something on the
     # path accepted the TCP connection, let the request through, then cut it.
     # That is a filtering appliance, not a closed port -- and no amount of
@@ -172,7 +187,7 @@ acme::_explain_failure() {
       # Double quotes in the suggested command on purpose: the User-Agent
       # contains an apostrophe, and a single-quoted shell string would need
       # '\'' escaping that is unreadable in a log line and easy to mis-paste.
-      hint="$(provider::label "$provider") reached your server, then the connection was cut mid-request. That is a firewall, WAF or IPS on the path -- not a closed port -- filtering the validation traffic. Reproduce it from any outside host:
+      hint="$(acme::_authority_label "$provider") reached your server, then the connection was cut mid-request. That is a firewall, WAF or IPS on the path -- not a closed port -- filtering the validation traffic. Reproduce it from any outside host:
     curl -A \"Mozilla/5.0 (compatible; Let's Encrypt validation server; +https://www.letsencrypt.org)\" http://<your-domain>/.well-known/acme-challenge/test
   If that hangs while a plain curl returns 404, the appliance is matching the authority's User-Agent. Three ways out: have /.well-known/acme-challenge/ exempted from inspection, try another authority (such a rule is usually specific to one), or use CERT_CHALLENGE=dns-01, which needs no inbound connection at all." ;;
     *'Connection refused'*|*'connection timed out'*|*'Timeout during connect'*)
@@ -180,7 +195,7 @@ acme::_explain_failure() {
     *'urn:ietf:params:acme:error:unauthorized'*|*'Invalid response from'*|*'404'*)
       hint="HTTP-01 validation failed: port 80 must be reachable from the internet and routed to this container. Check the domain's DNS, that port 80 is published, and any firewall." ;;
     *'externalAccountRequired'*|*'external account binding'*)
-      hint="$(provider::label "$provider") requires valid External Account Binding credentials. $(provider::notes "$provider")" ;;
+      hint="$(acme::_authority_label "$provider") requires valid External Account Binding credentials: set CERT_EAB_KID and CERT_EAB_HMAC_KEY.$( [[ -z ${CFG_ACME_SERVER:-} ]] && printf ' %s' "$(provider::notes "$provider")")" ;;
     *'DNS problem'*|*'NXDOMAIN'*|*'no valid A records'*)
       hint="The requested name does not resolve publicly. Fix the DNS record before retrying." ;;
     *'dnsapi'*|*'Add txt record error'*)

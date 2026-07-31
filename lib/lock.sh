@@ -57,12 +57,24 @@ lock::acquire() {
 lock::release() {
   if [[ -n $NC_LOCK_FD ]]; then
     flock -u "$NC_LOCK_FD" 2>/dev/null || true
-    exec {NC_LOCK_FD}>&- 2>/dev/null || true
+
+    # Never attach a redirection to a bare "exec": with no command to run, the
+    # redirection is applied to the shell itself and stays for the rest of the
+    # process. Writing "exec {fd}>&- 2>/dev/null" therefore silenced every
+    # later message -- all logging goes to stderr -- so the run summary, and
+    # any failure reported after the lock was released, simply vanished.
+    #
+    # Closing a descriptor that is no longer open aborts a non-interactive
+    # shell and cannot be caught with "|| true", so check before closing.
+    if [[ -e /proc/$$/fd/${NC_LOCK_FD} ]]; then
+      exec {NC_LOCK_FD}>&-
+    fi
     NC_LOCK_FD=''
   elif [[ -n $NC_LOCK_PATH && -d $NC_LOCK_PATH ]]; then
     rm -rf "$NC_LOCK_PATH"
   fi
   NC_LOCK_PATH=''
+  return 0
 }
 
 # Run a command under the lock, always releasing it on the way out.

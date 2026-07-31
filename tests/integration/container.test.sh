@@ -202,6 +202,18 @@ else
 fi
 docker rm -f "${CONTAINER}-pid" >/dev/null 2>&1
 
+# -- Scenario 4c: the run summary actually reaches the operator --------------
+# Releasing the lock used to attach a redirection to a bare "exec", which
+# applies it to the shell for the rest of the process. Everything logged after
+# that point -- the summary, and any failure reported once the lock was gone --
+# was written to /dev/null.
+renew_out=$(docker exec "$CONTAINER" certme renew --force 2>&1)
+if [[ $renew_out == *'Summary'* && $renew_out == *'Renewed'* ]]; then
+  ok 'a renewal prints its summary'
+else
+  ko 'a renewal prints its summary' "$renew_out"
+fi
+
 # -- Scenario 5: graceful shutdown ------------------------------------------
 # Version 1 ignored SIGTERM and was killed after the 10s grace period
 # (exit code 137), cutting every in-flight connection.

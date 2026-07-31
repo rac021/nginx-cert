@@ -88,11 +88,10 @@ RUN ln -sf ${NC_ROOT}/bin/certme /usr/local/bin/certme
 # The image runs unprivileged: every directory nginx-cert writes to at runtime
 # belongs to the nginx user.
 RUN set -eux; \
-    mkdir -p /data /var/www/acme/.well-known /var/www/html /etc/nginx/snippets; \
+    mkdir -p /data /var/www/acme/.well-known /var/www/html /etc/nginx/snippets /var/run/nginx; \
     printf '<!doctype html><meta charset=utf-8><title>nginx-cert</title><h1>nginx-cert</h1><p>No upstream configured (CERT_UPSTREAM).</p>\n' \
       > /var/www/html/index.html; \
-    touch /var/run/nginx.pid; \
-    chown -R nginx:nginx /data /var/www /etc/nginx /var/cache/nginx /var/log/nginx /var/run/nginx.pid; \
+    chown -R nginx:nginx /data /var/www /etc/nginx /var/cache/nginx /var/log/nginx /var/run/nginx; \
     chmod 755 /data
 
 USER nginx

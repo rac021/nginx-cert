@@ -12,7 +12,10 @@
 
 worker_processes      auto;
 worker_rlimit_nofile  16384;
-pid                   /var/run/nginx.pid;
+# In a directory owned by the runtime user: removing a file needs write
+# permission on its directory, not on the file, so a pid directly under
+# /var/run could be written but never unlinked at shutdown.
+pid                   /var/run/nginx/nginx.pid;
 error_log             /var/log/nginx/error.log notice;
 
 events {

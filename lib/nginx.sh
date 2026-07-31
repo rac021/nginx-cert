@@ -15,8 +15,23 @@ NC_NGINX_CONFD="${NC_NGINX_CONFD:-/etc/nginx/conf.d}"
 NC_NGINX_SNIPPETS="${NC_NGINX_SNIPPETS:-/etc/nginx/snippets}"
 NC_GENERATED_PREFIX='nginx-cert.'
 
-nginx::is_running() { [[ -s /var/run/nginx.pid ]] && kill -0 "$(cat /var/run/nginx.pid)" 2>/dev/null; }
-nginx::pid()        { cat /var/run/nginx.pid 2>/dev/null; }
+# Our own configuration puts the pid under /var/run/nginx/, but a user who
+# brings their own nginx.conf (CERT_MANAGE_NGINX=false) usually keeps the stock
+# location -- so both are accepted.
+readonly NC_NGINX_PID_FILES=(/var/run/nginx/nginx.pid /var/run/nginx.pid)
+
+nginx::pid() {
+  local f
+  for f in "${NC_NGINX_PID_FILES[@]}"; do
+    [[ -s $f ]] && { cat "$f"; return 0; }
+  done
+  return 1
+}
+
+nginx::is_running() {
+  local pid; pid=$(nginx::pid) || return 1
+  [[ -n $pid ]] && kill -0 "$pid" 2>/dev/null
+}
 
 # --- Rendering -------------------------------------------------------------
 

@@ -184,6 +184,24 @@ else
 fi
 rm -f /tmp/nc-config.$$
 
+# -- Scenario 4b: shutdown leaves no alert in the logs ----------------------
+# nginx could write its pid file but not unlink it, because removing a file
+# needs write permission on the directory, not on the file. Every stop ended
+# with an [alert].
+docker rm -f "${CONTAINER}-pid" >/dev/null 2>&1
+docker run -d --name "${CONTAINER}-pid" -p 18082:80 -e CERT_DOMAINS=localhost "$IMAGE" >/dev/null
+for _ in $(seq 1 30); do
+  docker logs "${CONTAINER}-pid" 2>&1 | grep -q 'nginx-cert is up' && break
+  sleep 1
+done
+docker stop "${CONTAINER}-pid" >/dev/null
+if docker logs "${CONTAINER}-pid" 2>&1 | grep -q 'unlink().*nginx.pid.*failed'; then
+  ko 'shutdown leaves no pid-file alert' "$(docker logs "${CONTAINER}-pid" 2>&1 | grep 'unlink()' | head -1)"
+else
+  ok 'shutdown leaves no pid-file alert'
+fi
+docker rm -f "${CONTAINER}-pid" >/dev/null 2>&1
+
 # -- Scenario 5: graceful shutdown ------------------------------------------
 # Version 1 ignored SIGTERM and was killed after the 10s grace period
 # (exit code 137), cutting every in-flight connection.

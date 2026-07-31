@@ -55,6 +55,17 @@ happens on its own.
   - [Local development](#local-development)
   - [Behind a load balancer, with your own nginx configuration](#behind-a-load-balancer-with-your-own-nginx-configuration)
   - [All example files](#all-example-files)
+- [Without Compose: plain `docker run`](#without-compose-plain-docker-run)
+  - [Let's Encrypt](#lets-encrypt-1)
+  - [Staging first, then production](#staging-first-then-production)
+  - [Actalis](#actalis-1)
+  - [ZeroSSL](#zerossl-1)
+  - [Buypass, Google, SSL.com](#buypass-go-ssl-1)
+  - [Private ACME server](#private-acme-server-1)
+  - [Several certificates and several authorities](#several-certificates-and-several-authorities-in-one-container)
+  - [Wildcard, IP address, local development](#wildcard-certificate-dns-01-1)
+  - [Behind a load balancer](#behind-a-load-balancer-with-your-own-nginx-configuration-1)
+  - [Day-to-day operations](#day-to-day-operations)
 - [The `certme` command](#the-certme-command)
 - [Customising nginx](#customising-nginx)
 - [Operations](#operations)
@@ -93,13 +104,13 @@ nginx-cert is that assembly, done once and tested:
 ### Public domain
 
 ```bash
-docker run -d --name web \
-  -p 80:80 -p 443:443 \
-  -v nginx-cert-data:/data \
-  -e CERT_DOMAINS=example.com \
-  -e CERT_EMAIL=you@example.com \
-  -e CERT_UPSTREAM=10.0.0.5:8080 \
-  rac021/nginx-cert:2
+docker run -d --name web                  \
+           -p 80:80 -p 443:443            \
+           -v nginx-cert-data:/data       \
+           -e CERT_DOMAINS=example.com    \
+           -e CERT_EMAIL=you@example.com  \
+           -e CERT_UPSTREAM=10.0.0.5:8080 \
+           rac021/nginx-cert:2
 ```
 
 Requirements: the domain's A/AAAA record points at this host, and port 80 is
@@ -110,7 +121,7 @@ Test with `CERT_STAGING=true` first — quotas are effectively unlimited there, 
 a wrong DNS record or a closed port 80 costs nothing. The certificates are not
 browser-trusted.
 
-**Going live** is then a single change: set `CERT_STAGING=false` and restart.
+**Going live** is then a single change: drop `CERT_STAGING` and restart.
 nginx-cert records which authority issued each certificate, notices the live one
 came from a staging environment, and requests a trusted replacement immediately —
 a staging certificate is valid for 90 days and correctly signed, so nothing in
@@ -301,9 +312,9 @@ ignored typo is worse than a refusal to start.
 
 | Variable | Default | Description |
 |---|---|---|
-| `CERT_ENABLE` | `true` | Set to `false` to run plain nginx with no certificate management. |
-| `CERT_DOMAINS` | — | Certificates to manage (see above). Empty means nginx only. |
-| `CERT_EMAIL` | — | Account e-mail. Required for any public authority. |
+| `CERT_ENABLE`   | `true` | Set to `false` to run plain nginx with no certificate management. |
+| `CERT_DOMAINS`  | — | Certificates to manage (see above). Empty means nginx only. |
+| `CERT_EMAIL`    | — | Account e-mail. Required for any public authority. |
 | `CERT_UPSTREAM` | — | Default backend for generated HTTPS servers. |
 
 #### Authority selection
@@ -878,9 +889,342 @@ server {
 
 ---
 
-## The `certme` command
+## Without Compose: plain `docker run`
+
+Every example above has a one-command equivalent. Three things are not optional:
+
+- **`-v nginx-cert-data:/data`** — without it, certificates and the ACME account
+  key live in the container layer and are re-requested on every recreate, which
+  exhausts the authority's rate limit within days.
+- **`-p 80:80`** — the authority connects to port 80 to validate the challenge,
+  even for a site that only serves HTTPS.
+- **`-e CERT_EMAIL`** — a real address; authorities reject `example.com`.
+
+Do not add `-e CERT_FORCE_RENEW=true` to a long-lived container: it re-issues on
+every scheduler run.
+
+For anything secret, prefer `--env-file secrets.env` over `-e`: values passed
+with `-e` end up in your shell history and in `docker inspect`.
+
+### Let's Encrypt
 
 ```bash
+docker run -d --name nginx-cert               \
+           --restart unless-stopped           \
+           -p 80:80 -p 443:443                \
+           -v nginx-cert-data:/data           \
+           -e CERT_EMAIL=you@example.com      \
+           -e CERT_DOMAINS=example.com,www.example.com \
+           -e CERT_UPSTREAM=10.0.0.5:8080     \
+           rac021/nginx-cert:2
+```
+
+To reach a backend by container name rather than by IP, put both containers on
+the same user-defined network and use that name:
+
+```bash
+docker network create web
+docker run -d --name app --network web traefik/whoami --port=8080
+docker run -d --name nginx-cert               \
+           --network web                      \
+           --restart unless-stopped           \
+           -p 80:80 -p 443:443                \
+           -v nginx-cert-data:/data           \
+           -e CERT_EMAIL=you@example.com      \
+           -e CERT_DOMAINS=example.com        \
+           -e CERT_UPSTREAM=app:8080          \
+           rac021/nginx-cert:2
+```
+
+### Staging first, then production
+
+Validate DNS and firewall against the staging environment, where quotas are
+effectively unlimited:
+
+```bash
+docker run -d --name nginx-cert               \
+           -p 80:80 -p 443:443                \
+           -v nginx-cert-data:/data           \
+           -e CERT_EMAIL=you@example.com      \
+           -e CERT_DOMAINS=example.com        \
+           -e CERT_STAGING=true               \
+           rac021/nginx-cert:2
+
+docker logs -f nginx-cert
+docker exec nginx-cert certme status
+```
+
+Once `certme status` shows `valid`, go live by recreating the container without
+`CERT_STAGING`:
+
+```bash
+docker rm -f nginx-cert
+docker run -d --name nginx-cert               \
+           --restart unless-stopped           \
+           -p 80:80 -p 443:443                \
+           -v nginx-cert-data:/data           \
+           -e CERT_EMAIL=you@example.com      \
+           -e CERT_DOMAINS=example.com        \
+           rac021/nginx-cert:2
+```
+
+No `--force` is needed: nginx-cert records which authority issued the live
+certificate, sees it came from a staging environment, and requests a trusted
+replacement by itself.
+
+### Actalis
+
+```bash
+docker run -d --name nginx-cert                     \
+           --restart unless-stopped                 \
+           -p 80:80 -p 443:443                      \
+           -v nginx-cert-data:/data                 \
+           -e CERT_EMAIL=you@example.com            \
+           -e CERT_DOMAINS=data.example.eu          \
+           -e CERT_UPSTREAM=10.0.0.5:8080           \
+           -e CERT_PROVIDER=actalis                 \
+           -e CERT_EAB_KID="$ACTALIS_EAB_KID"       \
+           -e CERT_EAB_HMAC_KEY="$ACTALIS_EAB_HMAC" \
+           rac021/nginx-cert:2
+```
+
+Free tier: one domain per certificate. Declare each host on its own line rather
+than as a multi-SAN certificate — see [several certificates](#several-certificates-and-several-authorities-in-one-container).
+
+To keep Actalis as the primary authority while surviving an outage on renewal
+day, replace `CERT_PROVIDER=actalis` with:
+
+```bash
+           -e CERT_PROVIDER=auto                    \
+           -e CERT_PROVIDER_CHAIN=actalis,letsencrypt \
+```
+
+### ZeroSSL
+
+An API key is enough — the EAB is derived from it once and cached:
+
+```bash
+docker run -d --name nginx-cert                     \
+           --restart unless-stopped                 \
+           -p 80:80 -p 443:443                      \
+           -v nginx-cert-data:/data                 \
+           -e CERT_EMAIL=you@example.com            \
+           -e CERT_DOMAINS=example.com              \
+           -e CERT_UPSTREAM=10.0.0.5:8080           \
+           -e CERT_PROVIDER=zerossl                 \
+           -e CERT_ZEROSSL_API_KEY="$ZEROSSL_API_KEY" \
+           rac021/nginx-cert:2
+```
+
+With EAB credentials generated by hand in the dashboard, swap the last line for
+`-e CERT_EAB_KID=... -e CERT_EAB_HMAC_KEY=...`.
+
+### Buypass Go SSL
+
+Free, no EAB, 180-day certificates:
+
+```bash
+docker run -d --name nginx-cert               \
+           --restart unless-stopped           \
+           -p 80:80 -p 443:443                \
+           -v nginx-cert-data:/data           \
+           -e CERT_EMAIL=you@example.com      \
+           -e CERT_DOMAINS=example.com        \
+           -e CERT_UPSTREAM=10.0.0.5:8080     \
+           -e CERT_PROVIDER=buypass           \
+           -e CERT_RENEW_DAYS=45              \
+           rac021/nginx-cert:2
+```
+
+### Google Trust Services
+
+```bash
+gcloud publicca external-account-keys create   # gives the KID and HMAC
+
+docker run -d --name nginx-cert                 \
+           --restart unless-stopped             \
+           -p 80:80 -p 443:443                  \
+           -v nginx-cert-data:/data             \
+           -e CERT_EMAIL=you@example.com        \
+           -e CERT_DOMAINS=example.com          \
+           -e CERT_UPSTREAM=10.0.0.5:8080       \
+           -e CERT_PROVIDER=google              \
+           -e CERT_EAB_KID="$GTS_EAB_KID"       \
+           -e CERT_EAB_HMAC_KEY="$GTS_EAB_HMAC" \
+           rac021/nginx-cert:2
+```
+
+### SSL.com
+
+Same shape, with `CERT_PROVIDER=sslcom` and the EAB credentials from the SSL.com
+customer portal:
+
+```bash
+docker run -d --name nginx-cert                    \
+           --restart unless-stopped                \
+           -p 80:80 -p 443:443                     \
+           -v nginx-cert-data:/data                \
+           -e CERT_EMAIL=you@example.com           \
+           -e CERT_DOMAINS=example.com             \
+           -e CERT_PROVIDER=sslcom                 \
+           -e CERT_EAB_KID="$SSLCOM_EAB_KID"       \
+           -e CERT_EAB_HMAC_KEY="$SSLCOM_EAB_HMAC" \
+           rac021/nginx-cert:2
+```
+
+### Private ACME server
+
+```bash
+docker run -d --name nginx-cert                       \
+           --restart unless-stopped                   \
+           -p 80:80 -p 443:443                        \
+           -v nginx-cert-data:/data                   \
+           -v ./corp-root-ca.pem:/etc/ssl/certs/corp-root-ca.pem:ro \
+           -e CERT_EMAIL=ops@example.com              \
+           -e CERT_DOMAINS=service.corp.example.com   \
+           -e CERT_UPSTREAM=10.0.0.5:8080             \
+           -e CERT_PROVIDER=letsencrypt               \
+           -e CERT_ACME_SERVER=https://ca.corp.example.com/acme/acme/directory \
+           -e CERT_RENEW_DAYS=10                      \
+           -e CERT_RENEW_INTERVAL=6h                  \
+           -e CERT_FALLBACK_SELFSIGNED=false          \
+           rac021/nginx-cert:2
+```
+
+`CERT_PROVIDER` only acts as a carrier here; `CERT_ACME_SERVER` overrides its
+directory URL. `letsencrypt` is convenient because it requires no EAB. Mounting
+the internal root certificate is what lets the container trust the ACME server's
+own HTTPS endpoint.
+
+### Several certificates and several authorities in one container
+
+`CERT_DOMAINS` takes one certificate per line, but a shell one-liner is easier
+to write with `;` as the separator — both are accepted:
+
+```bash
+docker run -d --name nginx-cert                          \
+           --restart unless-stopped                      \
+           -p 80:80 -p 443:443                           \
+           -v nginx-cert-data:/data                      \
+           -e CERT_EMAIL=ops@example.com                 \
+           -e CERT_DOMAINS='example.com, www.example.com | upstream=site:8080
+                            ; customer.example.eu        | upstream=cust:8080 provider=actalis
+                            ; status.example.com         | upstream=stat:8080 provider=buypass
+                            ; internal.lan               | upstream=int:8080' \
+           -e CERT_EAB_KID="$ACTALIS_EAB_KID"            \
+           -e CERT_EAB_HMAC_KEY="$ACTALIS_EAB_HMAC"      \
+           rac021/nginx-cert:2
+```
+
+Credentials are declared once; each authority reads only what it needs.
+`internal.lan` is not publicly resolvable, so it is signed by the local CA
+without any network round-trip. Check what happened with:
+
+```bash
+docker exec nginx-cert certme status
+```
+
+### Wildcard certificate (DNS-01)
+
+A wildcard needs a TXT record, so the DNS provider's API credentials are passed
+straight through to the acme.sh module:
+
+```bash
+docker run -d --name nginx-cert                  \
+           --restart unless-stopped              \
+           -p 80:80 -p 443:443                   \
+           -v nginx-cert-data:/data              \
+           -e CERT_EMAIL=ops@example.com         \
+           -e CERT_DOMAINS='*.example.com,example.com' \
+           -e CERT_UPSTREAM=10.0.0.5:8080        \
+           -e CERT_DNS_PROVIDER=dns_cf           \
+           -e CERT_DNS_SLEEP=30                  \
+           -e CF_Token="$CF_TOKEN"               \
+           -e CF_Account_ID="$CF_ACCOUNT_ID"     \
+           rac021/nginx-cert:2
+```
+
+Quote `*.example.com`, otherwise the shell expands it against the current
+directory. See the [DNS provider table](#wildcard-certificate-dns-01) for other
+modules.
+
+### IP address, no domain name
+
+```bash
+docker run -d --name nginx-cert               \
+           --restart unless-stopped           \
+           -p 80:80 -p 443:443                \
+           -v nginx-cert-data:/data           \
+           -e CERT_EMAIL=ops@example.com      \
+           -e CERT_DOMAINS=203.0.113.10       \
+           -e CERT_UPSTREAM=10.0.0.5:8080     \
+           -e CERT_RENEW_DAYS=2               \
+           -e CERT_RENEW_INTERVAL=6h          \
+           rac021/nginx-cert:2
+```
+
+Let's Encrypt issues IP certificates under the `shortlived` profile (~160 h),
+selected automatically — hence the much shorter renewal cycle. For 90-day IP
+certificates through ZeroSSL's REST API (paid plan), add
+`-e CERT_ZEROSSL_API_KEY=... -e CERT_RENEW_DAYS=30`.
+
+### Local development
+
+```bash
+docker run -d --name nginx-cert                      \
+           -p 80:80 -p 443:443                       \
+           -v nginx-cert-data:/data                  \
+           -e CERT_DOMAINS='localhost | upstream=app:8080 ; app.test | upstream=app:8080' \
+           -e CERT_HSTS=off                          \
+           rac021/nginx-cert:2
+
+docker cp nginx-cert:/data/ca/rootCA.pem .
+sudo cp rootCA.pem /usr/local/share/ca-certificates/nginx-cert.crt
+sudo update-ca-certificates
+```
+
+No `CERT_EMAIL` is needed: these names cannot be validated by any public
+authority, so nothing is contacted.
+
+### Behind a load balancer, with your own nginx configuration
+
+```bash
+docker run -d --name nginx-cert                          \
+           --restart unless-stopped                      \
+           -p 8080:8080 -p 8443:8443                     \
+           -v nginx-cert-data:/data                      \
+           -v ./conf.d:/etc/nginx/conf.d:ro              \
+           -e CERT_EMAIL=ops@example.com                 \
+           -e CERT_DOMAINS=example.com,www.example.com   \
+           -e CERT_HTTP_PORT=8080                        \
+           -e CERT_HTTPS_PORT=8443                       \
+           -e CERT_REAL_IP_FROM=10.0.0.0/8,172.16.0.0/12 \
+           -e CERT_HTTP_REDIRECT=false                   \
+           -e CERT_MANAGE_VHOSTS=false                   \
+           rac021/nginx-cert:2
+```
+
+Certificates stay available to your own servers at
+`/data/certs/<name>/{fullchain,privkey,chain}.pem`.
+
+### Day-to-day operations
+
+```bash
+docker exec nginx-cert certme status          # authority, expiry, renewal due
+docker exec nginx-cert certme status --json   # for monitoring
+docker exec nginx-cert certme providers       # what your credentials unlock
+docker exec nginx-cert certme config          # effective config, secrets masked
+docker exec nginx-cert certme renew           # renew what needs it, now
+docker exec nginx-cert certme renew --force   # renew regardless (uses quota)
+docker exec nginx-cert certme check           # nginx -t on the generated config
+docker logs -f nginx-cert                     # everything, timestamped
+```
+
+---
+
+## The `certme` command
+
+```
 docker exec <container> certme <command>
 ```
 

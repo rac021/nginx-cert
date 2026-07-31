@@ -29,6 +29,29 @@ _setup_spec() {
   NC_SPEC_DOMAINS=(); NC_SPEC_DOMAINS[$1]=$2
 }
 
+# A bundle signed by a separate CA, so that issuer != subject and the
+# self-signed heuristic does not fire. Needed to exercise the checks that come
+# after it in certs::renewal_reason.
+_gen_ca_signed_bundle() {
+  local dir=$1 cn=$2 days=${3:-90}
+  local ca="${TEST_TMPDIR}/testca"
+  if [[ ! -s ${ca}.pem ]]; then
+    openssl genpkey -algorithm EC -pkeyopt ec_paramgen_curve:P-256 -out "${ca}.key" 2>/dev/null
+    openssl req -x509 -new -key "${ca}.key" -sha256 -days 3650 -out "${ca}.pem" \
+      -subj '/O=Test/CN=Test Issuing CA' \
+      -addext 'basicConstraints=critical,CA:TRUE' 2>/dev/null
+  fi
+  openssl genpkey -algorithm EC -pkeyopt ec_paramgen_curve:P-256 -out "${dir}/privkey.pem" 2>/dev/null
+  local csr ext; csr=$(mktemp); ext=$(mktemp)
+  printf 'subjectAltName=DNS:%s\n' "$cn" >"$ext"
+  openssl req -new -key "${dir}/privkey.pem" -out "$csr" -subj "/CN=${cn}" 2>/dev/null
+  openssl x509 -req -in "$csr" -CA "${ca}.pem" -CAkey "${ca}.key" -CAcreateserial \
+    -out "${dir}/cert.pem" -days "$days" -sha256 -extfile "$ext" 2>/dev/null
+  rm -f "$csr" "$ext"
+  cp "${ca}.pem" "${dir}/chain.pem"
+  cat "${dir}/cert.pem" "${dir}/chain.pem" >"${dir}/fullchain.pem"
+}
+
 test_accepts_a_consistent_bundle() {
   local d; d=$(_mkdir_bundle ok)
   _gen_bundle "$d" 'example.com'
@@ -125,6 +148,40 @@ test_computes_days_remaining() {
   local days; days=$(certs::days_left 'daysleft')
   # One-day tolerance for rounding and timezone.
   assert_ok bash -c "[ '$days' -ge 88 ] && [ '$days' -le 90 ]"
+}
+
+# Leaving the staging environment is the normal go-live path, and nothing in
+# the certificate itself signals it: a staging certificate is valid for 90 days
+# and is properly signed, so only the recorded provider can catch it.
+test_renews_when_leaving_the_staging_environment() {
+  local d; d=$(_mkdir_bundle golive)
+  _gen_ca_signed_bundle "$d" 'example.com' 90
+  _setup_spec 'golive' 'example.com'
+  NC_SPEC_PROVIDER=(); NC_SPEC_PROVIDER["golive"]=auto
+  NC_SPEC_KIND=();     NC_SPEC_KIND["golive"]=fqdn
+  CFG_STATE_DIR="${TEST_TMPDIR}/state-golive"
+  CFG_RENEW_DAYS=30; CFG_FORCE_RENEW=false
+
+  certs::record_provider 'golive' 'letsencrypt-staging'
+
+  CFG_STAGING=true
+  assert_eq '' "$(certs::renewal_reason 'golive')" 'still in staging: nothing to do'
+
+  CFG_STAGING=false
+  assert_contains "$(certs::renewal_reason 'golive')" 'CERT_STAGING is now off'
+}
+
+test_does_not_renew_a_production_certificate_on_the_staging_check() {
+  local d; d=$(_mkdir_bundle prod)
+  _gen_ca_signed_bundle "$d" 'example.com' 90
+  _setup_spec 'prod' 'example.com'
+  NC_SPEC_PROVIDER=(); NC_SPEC_PROVIDER["prod"]=auto
+  NC_SPEC_KIND=();     NC_SPEC_KIND["prod"]=fqdn
+  CFG_STATE_DIR="${TEST_TMPDIR}/state-prod"
+  CFG_RENEW_DAYS=30; CFG_FORCE_RENEW=false; CFG_STAGING=false
+
+  certs::record_provider 'prod' 'letsencrypt'
+  assert_eq '' "$(certs::renewal_reason 'prod')" 'a production certificate must be left alone'
 }
 
 test_detects_a_selfsigned_certificate() {

@@ -106,8 +106,15 @@ Requirements: the domain's A/AAAA record points at this host, and port 80 is
 reachable from the internet (the authority connects to it to validate the
 challenge).
 
-Test with `CERT_STAGING=true` first if you like — quotas are effectively
-unlimited there, but the certificates are not browser-trusted.
+Test with `CERT_STAGING=true` first — quotas are effectively unlimited there, so
+a wrong DNS record or a closed port 80 costs nothing. The certificates are not
+browser-trusted.
+
+**Going live** is then a single change: set `CERT_STAGING=false` and restart.
+nginx-cert records which authority issued each certificate, notices the live one
+came from a staging environment, and requests a trusted replacement immediately —
+a staging certificate is valid for 90 days and correctly signed, so nothing in
+the certificate itself would have triggered a renewal.
 
 ### Locally, with no domain
 
@@ -222,10 +229,10 @@ zerossl-rest           ZeroSSL (REST API)         no        ip                no
                       ┌──────────────────────────── container ────┐
    :80  ──────────────▶ nginx ── /.well-known/acme-challenge/ ────▶ /var/www/acme
    :443 ──────────────▶  │                                          ▲
-                        │  ssl_certificate /data/certs/<name>/…     │ writes the
-                        │                                           │ challenge token
-                        ▼                                           │
-                     upstream                            acme.sh ───┘
+                      │  ssl_certificate /data/certs/<name>/…     │ writes the
+                      │                                           │ challenge token
+                      ▼                                           │
+                   upstream                            acme.sh ───┘
                                                             │
    scheduler (every 12 h ± jitter) ─────────────────────────┘
 ```
@@ -273,13 +280,13 @@ Options after `|` apply to that certificate only and override the global value:
 
 | Option      | Meaning                                                     |
 |-------------|-------------------------------------------------------------|
-| `upstream`  | Backend to proxy to (`host:port` or `scheme://host:port`)    |
+| `upstream`  | Backend to proxy to (`host:port` or `scheme://host:port`)   |
 | `provider`  | Pin a certificate authority for this certificate            |
 | `name`      | Lineage name (defaults to the first domain)                 |
 | `challenge` | `http-01` or `dns-01`                                       |
-| `dns`       | acme.sh DNS module (`dns_cf`, `dns_ovh`, …)                  |
-| `key_type`  | `ec-256`, `ec-384`, `ec-521`, `2048`, `3072`, `4096`         |
-| `profile`   | Certificate profile (e.g. Let's Encrypt `shortlived`)        |
+| `dns`       | acme.sh DNS module (`dns_cf`, `dns_ovh`, …)                 |
+| `key_type`  | `ec-256`, `ec-384`, `ec-521`, `2048`, `3072`, `4096`        |
+| `profile`   | Certificate profile (e.g. Let's Encrypt `shortlived`)       |
 | `staging`   | `true` to use this authority's staging environment          |
 | `hsts`      | HSTS header value, or `off`                                 |
 | `redirect`  | `false` to disable the HTTP → HTTPS redirect                |
@@ -985,7 +992,14 @@ The authority needs EAB credentials: set `CERT_EAB_KID` and
 **The browser warns about the certificate.**
 Either `CERT_STAGING=true` is still set, or every authority failed and the local
 fallback is in use. `certme status` shows `local` in that case; the logs explain
-why each authority was skipped or failed.
+why each authority was skipped or failed. Switching `CERT_STAGING` to `false`
+triggers a trusted re-issue on the next run by itself — no `--force` needed.
+
+**A setting seems to have no effect.**
+Unknown `CERT_*` variables are reported at startup and ignored, including the
+ones removed since version 1 (`CERT_PROXY_PASS_PORT`, `CERT_CRON_SCHEDULE`,
+`CERT_RENEWAL_THRESHOLD_DAYS`, `CERT_SELF_SIGNED_CERTIFICATE`). Check the logs
+for a warning, and `certme config` for what is actually in effect.
 
 **502 on HTTPS.**
 nginx is running but the upstream is not reachable. This is deliberate: the

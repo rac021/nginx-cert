@@ -65,6 +65,27 @@ certs::is_selfsigned() {
   [[ ${issuer#issuer=} == "${subject#subject=}" ]]
 }
 
+# --- Which authority actually issued the live certificate ------------------
+#
+# The issuer field of the certificate itself is not usable for this: it carries
+# a commercial name that changes over time ("R11", "Pretend Pear X1"), not the
+# provider id we reason about. Recording the id at install time is exact and
+# survives restarts.
+
+certs::_provider_file() { printf '%s/issued-by/%s' "$CFG_STATE_DIR" "$1"; }
+
+certs::record_provider() {
+  local file; file=$(certs::_provider_file "$1")
+  mkdir -p "$(dirname "$file")"
+  printf '%s\n' "$2" | util::atomic_write "$file" 0644
+}
+
+certs::recorded_provider() {
+  local file; file=$(certs::_provider_file "$1")
+  [[ -r $file ]] || return 1
+  util::trim "$(cat "$file")"
+}
+
 # --- Renewal decision ------------------------------------------------------
 #
 # A renewal is triggered when any of the following holds:
@@ -100,6 +121,15 @@ certs::renewal_reason() {
   if certs::is_selfsigned "$name" && [[ ${NC_SPEC_PROVIDER[$name]} != selfsigned ]] \
      && domain::is_acme_capable "${NC_SPEC_KIND[$name]}"; then
     printf 'local certificate in place, a public authority is possible'; return 0
+  fi
+
+  # Leaving staging is the normal way to go live: test against the staging
+  # environment, then flip CERT_STAGING to false. A staging certificate is
+  # valid for 90 days and is not self-signed, so none of the checks above would
+  # catch it -- the service would keep serving a certificate no browser trusts.
+  local issued_by; issued_by=$(certs::recorded_provider "$name" 2>/dev/null || printf '')
+  if [[ $issued_by == *-staging ]] && ! util::is_true "${CFG_STAGING:-false}"; then
+    printf 'issued by %s while CERT_STAGING is now off' "$issued_by"; return 0
   fi
 
   printf ''

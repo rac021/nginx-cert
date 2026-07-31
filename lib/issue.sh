@@ -209,6 +209,7 @@ issue::one() {
           issue::_clear_failure "$name"
           NC_CHANGED+=("$name")
           NC_LAST_PROVIDER[$name]=$provider
+          certs::record_provider "$name" "$provider"
           log::ok "'${name}' issued by $(issue::_provider_label "$provider") -- expires $(certs::not_after "$name")."
           [[ $provider == selfsigned ]] && log::warn \
             "  -> This certificate is NOT publicly trusted. The service is up, but browsers will warn."

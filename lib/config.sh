@@ -33,6 +33,39 @@ declare -A NC_SPEC_REDIRECT=()
 
 readonly NC_SPEC_KEYS=(name provider upstream challenge dns key_type profile staging hsts redirect)
 
+# Every CERT_* variable the program understands. Kept explicit rather than
+# derived, so an unknown variable can be reported instead of silently ignored:
+# a typo or a leftover setting from version 1 must not change behaviour without
+# saying so. tests/unit/config.test.sh fails if this list drifts from the code.
+readonly NC_KNOWN_CERT_VARS=(
+  CERT_ENABLE CERT_DOMAINS CERT_EMAIL CERT_UPSTREAM
+  CERT_PROVIDER CERT_PROVIDER_CHAIN CERT_ATTEMPTS CERT_RETRY_DELAY
+  CERT_FALLBACK_SELFSIGNED CERT_STAGING CERT_ACME_SERVER CERT_ACME_ARGS
+  CERT_ACME_TIMEOUT
+  CERT_EAB_KID CERT_EAB_HMAC_KEY CERT_ZEROSSL_API_KEY
+  CERT_KEY_TYPE CERT_CHALLENGE CERT_DNS_PROVIDER CERT_DNS_SLEEP CERT_PROFILE
+  CERT_RENEW_DAYS CERT_RENEW_INTERVAL CERT_RENEW_JITTER CERT_FORCE_RENEW
+  CERT_FAILURE_COOLDOWN CERT_FAILURE_COOLDOWN_MAX CERT_POST_HOOK
+  CERT_ZEROSSL_VALIDITY_DAYS CERT_ZEROSSL_TIMEOUT
+  CERT_SELFSIGNED_CA CERT_SELFSIGNED_DAYS
+  CERT_MANAGE_NGINX CERT_MANAGE_VHOSTS CERT_HTTP_REDIRECT CERT_HSTS
+  CERT_SSL_POLICY CERT_HTTP2 CERT_HTTP3 CERT_HTTP_PORT CERT_HTTPS_PORT
+  CERT_CLIENT_MAX_BODY_SIZE CERT_PROXY_TIMEOUT CERT_PROXY_CONNECT_TIMEOUT
+  CERT_WORKER_CONNECTIONS CERT_RESOLVER CERT_ACCESS_LOG CERT_REAL_IP_FROM
+  CERT_DATA_DIR CERT_WEBROOT
+  CERT_LOG_LEVEL CERT_LOG_FORMAT CERT_LOG_COLOR
+)
+
+# Variables that existed in version 1 and no longer do. Pasting an old
+# "docker run" command is the most likely way to meet them, so each one gets a
+# precise migration hint rather than a generic warning.
+declare -A NC_REMOVED_CERT_VARS=(
+  [CERT_PROXY_PASS_PORT]='removed: the ACME challenge is now served from a webroot, there is no internal proxy port to configure.'
+  [CERT_CRON_SCHEDULE]='removed: use CERT_RENEW_INTERVAL with a duration instead, e.g. CERT_RENEW_INTERVAL=12h.'
+  [CERT_RENEWAL_THRESHOLD_DAYS]='renamed: use CERT_RENEW_DAYS.'
+  [CERT_SELF_SIGNED_CERTIFICATE]='removed: use CERT_PROVIDER=selfsigned.'
+)
+
 config::_default() {
   local var=$1 fallback=$2
   local current=${!var:-}
@@ -104,8 +137,35 @@ config::load() {
   CFG_BACKUP_DIR="${CFG_DATA_DIR}/backups"
   CFG_LOCK_FILE="${CFG_DATA_DIR}/state/nginx-cert.lock"
 
+  config::warn_unknown_vars
   config::_parse_domains
   config::validate
+}
+
+# Report every CERT_* variable present in the environment that the program does
+# not understand. Silently ignoring one means a setting the operator believes is
+# active has no effect -- the failure mode is a configuration that looks right
+# and behaves differently.
+config::warn_unknown_vars() {
+  local var name known k
+  local -a unknown=()
+
+  while IFS= read -r name; do
+    if [[ -n ${NC_REMOVED_CERT_VARS[$name]:-} ]]; then
+      log::warn "${name} is no longer supported and is being ignored."
+      log::warn "  -> ${NC_REMOVED_CERT_VARS[$name]}"
+      continue
+    fi
+    known=0
+    for k in "${NC_KNOWN_CERT_VARS[@]}"; do [[ $name == "$k" ]] && { known=1; break; }; done
+    ((known)) || unknown+=("$name")
+  done < <(compgen -v | grep -E '^CERT_[A-Z0-9_]+$' | sort)
+
+  if ((${#unknown[@]})); then
+    log::warn "Unknown variable(s), ignored: ${unknown[*]}"
+    log::warn "  -> Check the spelling; 'certme config' lists what is actually in effect."
+  fi
+  return 0
 }
 
 # --- CERT_DOMAINS parsing --------------------------------------------------

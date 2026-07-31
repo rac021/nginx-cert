@@ -95,6 +95,67 @@ test_rejects_an_option_without_an_equals_sign() {
   assert_contains "$out" 'malformed option'
 }
 
+# --- The known-variable list must not drift from the code ------------------
+#
+# These two tests are what make config::warn_unknown_vars trustworthy: adding a
+# CERT_* variable without declaring it would make the program warn about its own
+# variable, and declaring one that nothing reads would advertise a setting that
+# does nothing.
+
+_referenced_cert_vars() {
+  # \b anchors the match to a real identifier start, so substrings of longer
+  # names (CFG_CERT_DIR, NC_KNOWN_CERT_VARS) are not mistaken for variables.
+  # The %%CERT_NAME%% template placeholder does start on a boundary, hence the
+  # explicit exclusion.
+  grep -rhoE '\bCERT_[A-Z0-9_]+' \
+      "$NC_ROOT"/lib "$NC_ROOT"/providers "$NC_ROOT"/entrypoint.sh "$NC_ROOT"/bin/certme \
+    | grep -vxE 'CERT_NAME' | sort -u
+}
+
+test_every_variable_read_by_the_code_is_declared() {
+  local v k found missing=()
+  while IFS= read -r v; do
+    [[ -n ${NC_REMOVED_CERT_VARS[$v]:-} ]] && continue
+    found=0
+    for k in "${NC_KNOWN_CERT_VARS[@]}"; do [[ $v == "$k" ]] && { found=1; break; }; done
+    ((found)) || missing+=("$v")
+  done < <(_referenced_cert_vars)
+  assert_eq '' "${missing[*]}" 'read by the code but absent from NC_KNOWN_CERT_VARS'
+}
+
+test_every_declared_variable_is_read_somewhere() {
+  local referenced; referenced=" $(_referenced_cert_vars | tr '\n' ' ')"
+  local k dead=()
+  for k in "${NC_KNOWN_CERT_VARS[@]}"; do
+    [[ $referenced == *" $k "* ]] || dead+=("$k")
+  done
+  assert_eq '' "${dead[*]}" 'declared in NC_KNOWN_CERT_VARS but never read'
+}
+
+test_warns_about_a_variable_removed_since_version_1() {
+  local out
+  out=$( CERT_PROXY_PASS_PORT=8080 CERT_RENEWAL_THRESHOLD_DAYS=30 \
+         NC_LOG_LEVEL=warn config::warn_unknown_vars 2>&1 )
+  assert_contains "$out" 'CERT_PROXY_PASS_PORT is no longer supported'
+  assert_contains "$out" 'webroot'
+  assert_contains "$out" 'CERT_RENEWAL_THRESHOLD_DAYS'
+  assert_contains "$out" 'CERT_RENEW_DAYS'
+}
+
+test_warns_about_a_misspelled_variable() {
+  local out
+  out=$( CERT_EMIAL=a@b.co NC_LOG_LEVEL=warn config::warn_unknown_vars 2>&1 )
+  assert_contains "$out" 'CERT_EMIAL'
+  assert_contains "$out" 'Unknown variable'
+}
+
+test_stays_silent_when_every_variable_is_known() {
+  local out
+  out=$( CERT_EMAIL=a@b.co CERT_DOMAINS=example.com NC_LOG_LEVEL=warn \
+         config::warn_unknown_vars 2>&1 )
+  assert_eq '' "$out"
+}
+
 test_rejects_two_certificates_with_the_same_name() {
   local out rc=0
   out=$( _parse $'example.com\nexample.com' 2>&1 ) || rc=$?

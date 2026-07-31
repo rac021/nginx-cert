@@ -46,6 +46,7 @@ happens on its own.
   - [Google Trust Services](#google-trust-services)
   - [SSL.com](#sslcom)
   - [Private ACME server](#private-acme-server)
+  - [Institutional CA (GÉANT TCS, HARICA…)](#institutional-ca-géant-tcs-harica-surf-dfn)
   - [Mixing authorities in one container](#mixing-authorities-in-one-container)
   - [Tuning the fallback chain](#tuning-the-fallback-chain)
   - [Adding an authority](#adding-an-authority)
@@ -461,6 +462,7 @@ only in which credentials you need. `certme providers` prints the table with a
 | Actalis | `actalis` | required | no | no | 90 days | free tier |
 | Google Trust Services | `google` | required | yes (DNS-01) | no | 90 days | free tier |
 | SSL.com | `sslcom` | required | yes (DNS-01) | no | 90 days | account |
+| Institutional (HARICA / GÉANT TCS) | via `CERT_ACME_SERVER` | required | varies | no | 1 year | free for members |
 | Local CA | `selfsigned` | — | yes | yes | 365 days | — |
 
 ### Let's Encrypt
@@ -662,6 +664,41 @@ services:
 volumes:
   nginx-cert-data:
 ```
+
+### Institutional CA (GÉANT TCS, HARICA, SURF, DFN…)
+
+Universities and research institutes usually already have a certificate service
+that speaks ACME, funded at the institution level. In Europe this is **GÉANT
+TCS**, relayed by the national research network — RENATER in France, SURF in the
+Netherlands, DFN in Germany, Belnet in Belgium. Since January 2025 the issuing
+authority behind TCS is **HARICA**.
+
+It is often the best option on a corporate network: the certificates are
+browser-trusted, cost nothing to the team, and the validation traffic comes from
+the institution's own provider rather than a public CA — which matters when a
+security appliance filters well-known validators.
+
+The directory URL is **specific to your organisation**, so there is no entry in
+`providers.tsv`; use the `CERT_ACME_SERVER` escape hatch. Your IT department
+provides the three values, from the HARICA Certificate Manager:
+
+```bash
+docker run -d --name nginx-cert                          \
+           --restart unless-stopped                      \
+           -v nginx-cert-data:/data                      \
+           -p 80:80 -p 443:443                           \
+           -e CERT_EMAIL=you@institution.example         \
+           -e CERT_DOMAINS=service.institution.example   \
+           -e CERT_UPSTREAM=app:8080                     \
+           -e CERT_PROVIDER=letsencrypt                  \
+           -e CERT_ACME_SERVER="https://acme-v02.harica.gr/acme/<your-uuid>/directory" \
+           -e CERT_EAB_KID="$TCS_EAB_KID"                \
+           -e CERT_EAB_HMAC_KEY="$TCS_EAB_HMAC"          \
+           rac021/nginx-cert:2
+```
+
+`CERT_PROVIDER` only acts as a carrier — `CERT_ACME_SERVER` overrides its
+directory URL. Pick `letsencrypt` because it needs no EAB of its own.
 
 ### Mixing authorities in one container
 

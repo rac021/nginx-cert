@@ -1,0 +1,37 @@
+# Local development over HTTPS, with no public authority involved.
+#
+#   docker compose -f examples/compose.localdev.yml up -d
+#   docker compose -f examples/compose.localdev.yml cp nginx-cert:/data/ca/rootCA.pem .
+#
+# Import rootCA.pem once into your browser or system trust store and every
+# development certificate -- present and future -- is accepted without a
+# warning.
+#
+#   Linux   : sudo cp rootCA.pem /usr/local/share/ca-certificates/nginx-cert.crt && sudo update-ca-certificates
+#   macOS   : sudo security add-trusted-cert -d -r trustRoot -k /Library/Keychains/System.keychain rootCA.pem
+#   Firefox : Settings -> Privacy -> Certificates -> View Certificates -> Import
+
+services:
+  nginx-cert:
+    image: rac021/nginx-cert:2
+    ports: ["80:80", "443:443"]
+    environment:
+      # No public authority can validate these names: nginx-cert detects that
+      # and goes straight to the local authority, with no pointless network
+      # round-trip.
+      CERT_DOMAINS: |
+        localhost           | upstream=app:8080
+        app.test            | upstream=app:8080
+        api.localhost       | upstream=api:3000
+      CERT_LOG_LEVEL: debug
+      # A browser reload must not be blocked by a stale HSTS entry left over
+      # from an earlier experiment.
+      CERT_HSTS: "off"
+    volumes:
+      - nginx-cert-data:/data
+
+  app: { image: traefik/whoami, command: --port=8080, expose: ["8080"] }
+  api: { image: traefik/whoami, command: --port=3000, expose: ["3000"] }
+
+volumes:
+  nginx-cert-data:

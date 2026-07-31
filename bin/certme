@@ -1,0 +1,254 @@
+#!/usr/bin/env bash
+# certme -- nginx-cert command line interface.
+#
+#   docker exec <container> certme status
+#   docker exec <container> certme renew --force
+set -euo pipefail
+
+NC_ROOT="${NC_ROOT:-/opt/nginx-cert}"
+# shellcheck source=../lib/bootstrap.sh
+source "${NC_ROOT}/lib/bootstrap.sh"
+
+usage() {
+  cat <<'EOF'
+certme -- manage nginx-cert TLS certificates
+
+USAGE
+    certme <command> [options]
+
+COMMANDS
+    issue [name...]     Issue or renew the certificates that need it.
+                        With no argument: every declared certificate.
+    renew [name...]     Alias for "issue".
+    status [--json]     State of each certificate (authority, expiry, whether a
+                        renewal is due).
+    list                List declared certificates and their domains.
+    providers           Known certificate authorities and their availability.
+    config              Effective configuration, secrets masked.
+    render              Regenerate the nginx configuration from the templates.
+    check               Validate the nginx configuration (nginx -t).
+    reload              Validate, then reload nginx.
+    revoke <name>       Revoke a certificate with its issuing authority.
+    health              Health probe (used by the Docker HEALTHCHECK).
+    version             Version of nginx-cert and its components.
+
+OPTIONS
+    --force             Renew even if the certificate is still valid.
+    --json              Machine-readable output ("status" command).
+    -h, --help          Show this help.
+
+EXIT CODES
+    0  success          3  no authority could issue the certificate
+    1  failure          4  invalid nginx configuration
+    2  configuration    5  another operation is already running
+EOF
+}
+
+# --- Applying changes ------------------------------------------------------
+#
+# After an issuance the nginx configuration must be regenerated (a new
+# certificate may create a server that did not exist), validated, then
+# reloaded. If validation fails we roll back: a stale certificate is better
+# than an nginx that refuses to start.
+cmd::apply_changes() {
+  ((${#NC_CHANGED[@]} == 0)) && return 0
+
+  nginx::render || return "$EX_NGINX"
+
+  if ! nginx::test; then
+    log::error "The configuration produced after renewal is invalid: rolling back."
+    local name
+    for name in "${NC_CHANGED[@]}"; do certs::rollback "$name" || true; done
+    nginx::render || true
+    nginx::test || log::error "The configuration is still invalid after rollback: manual intervention required."
+    return "$EX_NGINX"
+  fi
+
+  nginx::reload || return "$EX_NGINX"
+
+  if [[ -n ${CFG_POST_HOOK:-} ]]; then
+    log::info "Running CERT_POST_HOOK…"
+    if CERTME_CHANGED="${NC_CHANGED[*]}" bash -c "$CFG_POST_HOOK"; then
+      log::ok "CERT_POST_HOOK finished."
+    else
+      log::warn "CERT_POST_HOOK returned an error (the renewal itself stands)."
+    fi
+  fi
+  return 0
+}
+
+# --- Commands --------------------------------------------------------------
+
+cmd::issue() {
+  local -a only=("$@")
+
+  if ! util::is_true "$CFG_ENABLE"; then
+    log::warn "CERT_ENABLE=false: certificate management is disabled."
+    return 0
+  fi
+  ((${#NC_SPEC_NAMES[@]} == 0)) && { log::warn "No certificate declared (CERT_DOMAINS is empty)."; return 0; }
+
+  # Optionally restrict the run to a subset of certificates.
+  if ((${#only[@]})); then
+    local n keep=() found d
+    for n in "${only[@]}"; do
+      found=0
+      for d in "${NC_SPEC_NAMES[@]}"; do [[ $d == "$n" ]] && { keep+=("$n"); found=1; }; done
+      ((found)) || log::die "$EX_CONFIG" "Unknown certificate: '${n}'. See 'certme list'."
+    done
+    NC_SPEC_NAMES=("${keep[@]}")
+  fi
+
+  bootstrap::prepare_dirs
+  bootstrap::cleanup_staging
+
+  local rc=0
+  lock::with "$CFG_LOCK_FILE" 0 issue::all || rc=$?
+  ((rc == EX_BUSY)) && return "$EX_BUSY"
+
+  local apply_rc=0
+  cmd::apply_changes || apply_rc=$?
+  issue::report
+
+  ((apply_rc != 0)) && return "$apply_rc"
+  ((${#NC_FAILED[@]})) && return "$EX_ISSUE"
+  return 0
+}
+
+cmd::status() {
+  local json=false
+  [[ ${1:-} == --json ]] && json=true
+
+  if $json; then
+    local out='' name
+    for name in ${NC_SPEC_NAMES[@]+"${NC_SPEC_NAMES[@]}"}; do
+      out+="${out:+,}$(certs::status_json_one "$name")"
+    done
+    printf '{"version":"%s","certificates":[%s]}\n' "$NC_VERSION" "$out"
+    return 0
+  fi
+
+  ((${#NC_SPEC_NAMES[@]} == 0)) && { printf 'No certificate declared.\n'; return 0; }
+
+  # ASCII-only headers: printf pads by bytes, not by display columns, so an
+  # accented character would shift the whole column.
+  printf '%-28s %-13s %-26s %-9s %s\n' 'CERTIFICATE' 'STATE' 'AUTHORITY' 'EXPIRES' 'DOMAINS'
+  printf '%s\n' "$(printf -- '-%.0s' $(seq 1 110))"
+
+  local name state issuer days reason
+  for name in "${NC_SPEC_NAMES[@]}"; do
+    if ! certs::exists "$name"; then
+      printf '%-28s %-13s %-26s %-9s %s\n' "$name" 'missing' '-' '-' "${NC_SPEC_DOMAINS[$name]}"
+      continue
+    fi
+    days=$(certs::days_left "$name")
+    issuer=$(certs::issuer "$name" | sed -n 's/.*CN *= *\([^,/]*\).*/\1/p'); issuer=${issuer:-unknown}
+    reason=$(certs::renewal_reason "$name")
+    if ((days < 0));                   then state='EXPIRED'
+    elif certs::is_selfsigned "$name"; then state='local'
+    elif [[ -n $reason ]];             then state='renew due'
+    else                                    state='valid'
+    fi
+    printf '%-28s %-13s %-26s %-9s %s\n' \
+      "$name" "$state" "${issuer:0:26}" "D-${days}" "${NC_SPEC_DOMAINS[$name]}"
+  done
+}
+
+cmd::list() {
+  local name
+  for name in ${NC_SPEC_NAMES[@]+"${NC_SPEC_NAMES[@]}"}; do
+    printf '%s\t%s\t%s\t%s\n' "$name" "${NC_SPEC_KIND[$name]}" \
+      "${NC_SPEC_PROVIDER[$name]}" "${NC_SPEC_DOMAINS[$name]}"
+  done
+}
+
+cmd::providers() {
+  printf '%-22s %-26s %-9s %-22s %s\n' 'ID' 'AUTHORITY' 'EAB' 'ACCEPTED KINDS' 'USABLE HERE'
+  printf '%s\n' "$(printf -- '-%.0s' $(seq 1 110))"
+  local id eab avail
+  while IFS= read -r id; do
+    if provider::needs_eab "$id"; then eab='required'; else eab='no'; fi
+    if provider::eab_available "$id"; then avail='yes'; else avail='no -- EAB credentials missing'; fi
+    printf '%-22s %-26s %-9s %-22s %s\n' \
+      "$id" "$(provider::label "$id")" "$eab" "${NC_PROVIDER_CAPS[$id]}" "$avail"
+  done < <(provider::list_ids)
+  printf '%-22s %-26s %-9s %-22s %s\n' 'selfsigned' 'Local authority' 'no' 'all' 'yes (last resort)'
+  printf '%-22s %-26s %-9s %-22s %s\n' 'zerossl-rest' 'ZeroSSL (REST API)' 'no' 'ip' \
+    "$(zerossl_rest::available && printf 'yes' || printf 'no -- CERT_ZEROSSL_API_KEY unset')"
+}
+
+cmd::version() {
+  printf 'nginx-cert  %s\n' "$NC_VERSION"
+  printf 'nginx       %s\n' "$(nginx -v 2>&1 | sed 's|.*nginx/||')"
+  printf 'acme.sh     %s\n' "$(acme::version 2>/dev/null || printf 'absent')"
+  printf 'openssl     %s\n' "$(openssl version 2>/dev/null | cut -d' ' -f1-2)"
+}
+
+cmd::revoke() {
+  local name=${1:-}
+  [[ -z $name ]] && log::die "$EX_CONFIG" "Usage: certme revoke <name>. See 'certme list'."
+  [[ -z ${NC_SPEC_DOMAINS[$name]:-} ]] && log::die "$EX_CONFIG" "Unknown certificate: '${name}'."
+  local provider=${NC_LAST_PROVIDER[$name]:-${NC_SPEC_PROVIDER[$name]}}
+  [[ $provider == auto ]] && provider=letsencrypt
+  log::warn "Revoking '${name}' with $(provider::label "$provider")…"
+  acme::revoke "$name" "$provider"
+}
+
+# Health probe: nginx must answer, and no certificate may be expired.
+cmd::health() {
+  if ! nginx::is_running; then
+    printf 'nginx is not running\n' >&2; return 1
+  fi
+  if ! curl -fsS --max-time 3 -o /dev/null "http://127.0.0.1:${CFG_HTTP_PORT}/healthz" 2>/dev/null; then
+    printf 'nginx is not answering on /healthz (port %s)\n' "$CFG_HTTP_PORT" >&2; return 1
+  fi
+  local name days expired=()
+  for name in ${NC_SPEC_NAMES[@]+"${NC_SPEC_NAMES[@]}"}; do
+    certs::exists "$name" || continue
+    days=$(certs::days_left "$name")
+    ((days < 0)) && expired+=("$name")
+  done
+  if ((${#expired[@]})); then
+    printf 'expired certificate(s): %s\n' "${expired[*]}" >&2; return 1
+  fi
+  printf 'ok\n'
+}
+
+# --- Entry point -----------------------------------------------------------
+main() {
+  local cmd=${1:-help}; shift || true
+
+  case $cmd in
+    -h|--help|help) usage; return 0 ;;
+  esac
+
+  # --force is accepted on every issuance command.
+  local -a rest=()
+  local a
+  for a in "$@"; do
+    case $a in
+      --force) export CERT_FORCE_RENEW=true ;;
+      *) rest+=("$a") ;;
+    esac
+  done
+  set -- ${rest[@]+"${rest[@]}"}
+
+  config::load
+
+  case $cmd in
+    issue|renew)  cmd::issue "$@" ;;
+    status)       cmd::status "$@" ;;
+    list)         cmd::list ;;
+    providers)    cmd::providers ;;
+    config)       config::summary ;;
+    render)       bootstrap::prepare_dirs; nginx::render && nginx::test ;;
+    check)        nginx::test ;;
+    reload)       nginx::reload ;;
+    revoke)       cmd::revoke "$@" ;;
+    health)       cmd::health ;;
+    version)      cmd::version ;;
+    *)            log::error "Unknown command: '${cmd}'."; usage >&2; return "$EX_CONFIG" ;;
+  esac
+}
+
+main "$@"

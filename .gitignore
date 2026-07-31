@@ -1,0 +1,11 @@
+# Runtime data produced by a local run
+data/
+certme_actalis/
+certificate_until_*/
+letsencrypt/
+
+# Editors and OS
+.DS_Store
+*.swp
+.idea/
+.vscode/

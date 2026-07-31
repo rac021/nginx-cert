@@ -1,0 +1,41 @@
+# Wildcard certificate via the DNS-01 challenge.
+#
+# A wildcard cannot be validated over HTTP-01: the authority requires a TXT
+# record under _acme-challenge, so nginx-cert needs API access to your DNS
+# provider.
+#
+# The DNS module comes from acme.sh (~150 providers supported). Pick the module
+# name and pass its credentials as environment variables -- they are forwarded
+# to acme.sh unchanged.
+#
+#   Cloudflare  dns_cf     CF_Token, CF_Account_ID
+#   OVH         dns_ovh    OVH_AK, OVH_AS, OVH_CK, OVH_END_POINT
+#   Gandi       dns_gandi_livedns  GANDI_LIVEDNS_KEY
+#   Route53     dns_aws    AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY
+#   Full list: https://github.com/acmesh-official/acme.sh/wiki/dnsapi
+
+services:
+  nginx-cert:
+    image: rac021/nginx-cert:2
+    restart: unless-stopped
+    ports: ["80:80", "443:443"]
+    environment:
+      CERT_EMAIL: ops@example.com
+      CERT_DOMAINS: |
+        *.example.com, example.com | upstream=app:8080
+      CERT_DNS_PROVIDER: dns_cf
+      # Propagation delay before the authority checks the TXT record.
+      CERT_DNS_SLEEP: "30"
+      # Credentials handed straight to the acme.sh module.
+      CF_Token: ${CF_TOKEN:?CF_TOKEN is required}
+      CF_Account_ID: ${CF_ACCOUNT_ID:?CF_ACCOUNT_ID is required}
+    volumes:
+      - nginx-cert-data:/data
+
+  app:
+    image: traefik/whoami
+    command: --port=8080
+    expose: ["8080"]
+
+volumes:
+  nginx-cert-data:

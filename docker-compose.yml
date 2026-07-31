@@ -1,0 +1,44 @@
+# Minimal production setup.
+#
+#   1. Replace example.com with your domain and set a real e-mail address.
+#   2. Point the domain's A/AAAA record at this machine.
+#   3. docker compose up -d
+#
+# The certificate is requested from Let's Encrypt at startup and renewed
+# automatically. If that fails, the next authorities are tried, and a local
+# certificate takes over so the service stays reachable.
+
+services:
+  nginx-cert:
+    image: rac021/nginx-cert:2
+    container_name: nginx-cert
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    environment:
+      CERT_EMAIL: you@example.com
+      CERT_DOMAINS: example.com,www.example.com
+      # Address of the application to expose over HTTPS.
+      CERT_UPSTREAM: app:8080
+      # Set to true while testing: very high quotas, but the certificates are
+      # not browser-trusted. Switch back to false afterwards.
+      CERT_STAGING: "false"
+    volumes:
+      # Required: certificates, ACME account key and local authority.
+      # Without this volume everything is re-requested each time the container
+      # is recreated, and the authority's quota runs out within days.
+      - nginx-cert-data:/data
+      # Optional: your own nginx servers, included automatically.
+      # - ./conf.d:/etc/nginx/conf.d:ro
+
+  app:
+    image: traefik/whoami
+    container_name: app
+    restart: unless-stopped
+    expose:
+      - "8080"
+    command: --port=8080
+
+volumes:
+  nginx-cert-data:

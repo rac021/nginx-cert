@@ -1,0 +1,41 @@
+# Actalis, the European certificate authority -- native integration.
+#
+# Prerequisites: a free account on actalis.com, then "Enable ACME" in the
+# customer portal to obtain your EAB credentials (KID + HMAC key).
+# The free tier issues single-domain certificates valid for 90 days.
+#
+#   export ACTALIS_EAB_KID=...
+#   export ACTALIS_EAB_HMAC=...
+#   docker compose -f examples/compose.actalis.yml up -d
+#
+# This fully replaces the standalone actalis.sh script: no ephemeral certbot
+# container, no temporary nginx on port 80, and renewal is handled without any
+# manual step.
+
+services:
+  nginx-cert:
+    image: rac021/nginx-cert:2
+    restart: unless-stopped
+    ports: ["80:80", "443:443"]
+    environment:
+      CERT_EMAIL: you@example.com
+      CERT_DOMAINS: data.example.eu
+      CERT_UPSTREAM: app:8080
+      CERT_EAB_KID: ${ACTALIS_EAB_KID:?ACTALIS_EAB_KID is required}
+      CERT_EAB_HMAC_KEY: ${ACTALIS_EAB_HMAC:?ACTALIS_EAB_HMAC is required}
+      # "auto" plus a chain starting with actalis: Actalis is the primary
+      # authority, but if it is unavailable on renewal day Let's Encrypt takes
+      # over instead of letting the certificate expire.
+      # To pin Actalis and nothing else: CERT_PROVIDER=actalis.
+      CERT_PROVIDER: auto
+      CERT_PROVIDER_CHAIN: actalis,letsencrypt
+    volumes:
+      - nginx-cert-data:/data
+
+  app:
+    image: traefik/whoami
+    command: --port=8080
+    expose: ["8080"]
+
+volumes:
+  nginx-cert-data:

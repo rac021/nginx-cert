@@ -1,0 +1,15 @@
+# Everything that is not needed to build the image.
+# Without this file the entire Git history is shipped to the Docker daemon.
+.git
+.github
+.gitignore
+tests
+docs
+examples
+*.md
+!README.md
+docker-compose*.yml
+actalis.sh
+data
+letsencrypt
+.DS_Store

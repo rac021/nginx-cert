@@ -1,0 +1,33 @@
+# Multi-site reverse proxy: several independent certificates in a single
+# container, each routed to its own service.
+#
+# One line of CERT_DOMAINS = one certificate = one generated HTTPS server.
+# Options after "|" apply to that line only.
+
+services:
+  nginx-cert:
+    image: rac021/nginx-cert:2
+    restart: unless-stopped
+    ports: ["80:80", "443:443"]
+    environment:
+      CERT_EMAIL: ops@example.com
+      CERT_DOMAINS: |
+        example.com, www.example.com   | upstream=site:8080
+        api.example.com                | upstream=api:3000
+        grafana.example.com            | upstream=grafana:3000 hsts=off
+        # Actalis issues one domain per certificate on the free tier.
+        shop.example.org               | upstream=shop:80 provider=actalis
+      # Actalis EAB credentials, used by the line above.
+      CERT_EAB_KID: ${ACTALIS_EAB_KID}
+      CERT_EAB_HMAC_KEY: ${ACTALIS_EAB_HMAC}
+      CERT_SSL_POLICY: intermediate
+    volumes:
+      - nginx-cert-data:/data
+
+  site:    { image: traefik/whoami, command: --port=8080, expose: ["8080"] }
+  api:     { image: traefik/whoami, command: --port=3000, expose: ["3000"] }
+  grafana: { image: grafana/grafana, expose: ["3000"] }
+  shop:    { image: nginx:alpine, expose: ["80"] }
+
+volumes:
+  nginx-cert-data:

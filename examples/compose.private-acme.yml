@@ -1,0 +1,54 @@
+# Private or corporate ACME server (step-ca, Smallstep, EJBCA, Vault, ...).
+#
+# Any RFC 8555 server works: point CERT_ACME_SERVER at its directory URL and
+# nginx-cert uses the same code path as any public authority.
+#
+# Two things usually need attention with a private CA:
+#
+#   1. The container must trust the CA that signs the ACME server's own HTTPS
+#      certificate, otherwise the very first request fails on TLS verification.
+#      Mount your root certificate into the system trust store.
+#
+#   2. Internal names (*.internal, *.lan, single labels) are classified as
+#      non-public by nginx-cert and would normally go straight to the local
+#      self-signed authority. Pin the provider explicitly so the private CA is
+#      used instead.
+
+services:
+  nginx-cert:
+    image: rac021/nginx-cert:2
+    restart: unless-stopped
+    ports: ["80:80", "443:443"]
+    environment:
+      CERT_EMAIL: ops@example.com
+      CERT_DOMAINS: service.corp.example.com | upstream=app:8080
+
+      # Any authority id works as the carrier; the URL below overrides its
+      # directory. letsencrypt is a convenient choice: it requires no EAB.
+      CERT_PROVIDER: letsencrypt
+      CERT_ACME_SERVER: https://ca.corp.example.com/acme/acme/directory
+
+      # Uncomment if your ACME server requires External Account Binding.
+      # CERT_EAB_KID: ${CORP_EAB_KID}
+      # CERT_EAB_HMAC_KEY: ${CORP_EAB_HMAC}
+
+      # A private CA usually issues shorter-lived certificates than a public one.
+      CERT_RENEW_DAYS: "10"
+      CERT_RENEW_INTERVAL: 6h
+
+      # If the private CA is unreachable, do not silently downgrade to a
+      # self-signed certificate -- fail loudly instead.
+      CERT_FALLBACK_SELFSIGNED: "false"
+    volumes:
+      - nginx-cert-data:/data
+      # Root certificate of the internal PKI, so the container trusts the ACME
+      # server's own HTTPS endpoint.
+      - ./corp-root-ca.pem:/etc/ssl/certs/corp-root-ca.pem:ro
+
+  app:
+    image: traefik/whoami
+    command: --port=8080
+    expose: ["8080"]
+
+volumes:
+  nginx-cert-data:

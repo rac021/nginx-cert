@@ -1,0 +1,47 @@
+# HTTPS on a bare IP address, with no domain name.
+#
+# Two authorities can do this, and they make opposite trade-offs:
+#
+#   Let's Encrypt   free, but IP certificates must use the "shortlived"
+#                   profile: ~160 hours of validity. nginx-cert selects that
+#                   profile automatically; you only need to renew far more
+#                   often (CERT_RENEW_DAYS=2, checked every 6h).
+#
+#   ZeroSSL REST    90 days, but requires a paid plan. Selected automatically
+#                   when CERT_ZEROSSL_API_KEY is set and the name is an IP.
+#
+# The address must be public and reachable on port 80 from the internet.
+# Private ranges (10/8, 192.168/16, ...) are detected and signed by the local
+# CA instead -- no authority will certify them.
+
+services:
+  # -- Variant A: Let's Encrypt, free, short-lived --------------------------
+  nginx-cert:
+    image: rac021/nginx-cert:2
+    restart: unless-stopped
+    ports: ["80:80", "443:443"]
+    environment:
+      CERT_EMAIL: ops@example.com
+      CERT_DOMAINS: 203.0.113.10
+      CERT_UPSTREAM: app:8080
+      # ~160-hour certificates: renew when 2 days remain, check every 6 hours.
+      CERT_RENEW_DAYS: "2"
+      CERT_RENEW_INTERVAL: 6h
+
+      # -- Variant B: ZeroSSL REST, 90 days, paid plan --------------------
+      # Just add the API key; nginx-cert inserts the REST path into the chain
+      # for IP addresses only.
+      # CERT_ZEROSSL_API_KEY: ${ZEROSSL_API_KEY}
+      # CERT_ZEROSSL_VALIDITY_DAYS: "90"
+      # CERT_RENEW_DAYS: "30"
+      # CERT_RENEW_INTERVAL: 12h
+    volumes:
+      - nginx-cert-data:/data
+
+  app:
+    image: traefik/whoami
+    command: --port=8080
+    expose: ["8080"]
+
+volumes:
+  nginx-cert-data:

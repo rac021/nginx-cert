@@ -1,0 +1,56 @@
+# Several certificate authorities in a single container.
+#
+# Each line of CERT_DOMAINS is an independent certificate and may pin its own
+# authority with "provider=". Credentials are global; nginx-cert only uses the
+# ones the selected authority actually needs.
+#
+# Useful when different sites have different constraints -- a customer who
+# requires a European CA, an internal tool where any free CA will do, a host
+# that must keep working if one authority has an outage.
+#
+#   export ACTALIS_EAB_KID=... ACTALIS_EAB_HMAC=... ZEROSSL_API_KEY=...
+#   docker compose -f examples/compose.multi-ca.yml up -d
+#
+# Check which authority signed what:  docker exec <container> certme status
+
+services:
+  nginx-cert:
+    image: rac021/nginx-cert:2
+    restart: unless-stopped
+    ports: ["80:80", "443:443"]
+    environment:
+      CERT_EMAIL: ops@example.com
+      CERT_DOMAINS: |
+        # Default authority (auto -> Let's Encrypt first).
+        www.example.com, example.com   | upstream=site:8080
+
+        # Pinned to Actalis: European CA, one domain per certificate.
+        customer.example.eu            | upstream=customer:8080 provider=actalis
+
+        # Pinned to ZeroSSL, wildcard via DNS-01.
+        *.apps.example.com             | upstream=apps:8080 provider=zerossl challenge=dns-01 dns=dns_cf
+
+        # Buypass: 180-day certificates, no EAB needed.
+        status.example.com             | upstream=status:8080 provider=buypass
+
+        # No public authority possible: signed by the local CA.
+        internal.lan                   | upstream=internal:8080
+
+      # Credentials for the authorities used above. Each is only read by the
+      # authority that needs it.
+      CERT_EAB_KID: ${ACTALIS_EAB_KID}
+      CERT_EAB_HMAC_KEY: ${ACTALIS_EAB_HMAC}
+      CERT_ZEROSSL_API_KEY: ${ZEROSSL_API_KEY}
+      CF_Token: ${CF_TOKEN}
+
+    volumes:
+      - nginx-cert-data:/data
+
+  site:     { image: traefik/whoami, command: --port=8080, expose: ["8080"] }
+  customer: { image: traefik/whoami, command: --port=8080, expose: ["8080"] }
+  apps:     { image: traefik/whoami, command: --port=8080, expose: ["8080"] }
+  status:   { image: traefik/whoami, command: --port=8080, expose: ["8080"] }
+  internal: { image: traefik/whoami, command: --port=8080, expose: ["8080"] }
+
+volumes:
+  nginx-cert-data:

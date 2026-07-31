@@ -1,0 +1,86 @@
+# Behind a load balancer, and bringing your own nginx configuration.
+#
+# Two independent things are shown here, because they usually appear together
+# in an existing infrastructure:
+#
+#   1. nginx-cert sits behind an upstream load balancer or CDN, so it must
+#      restore the real client address and may listen on non-privileged ports;
+#   2. you already have an nginx configuration and want nginx-cert to manage
+#      certificates only.
+#
+# Level of control, from lightest to heaviest:
+#
+#   default                      nginx-cert generates everything
+#   CERT_MANAGE_VHOSTS=false     it generates the base, you write the servers
+#   CERT_MANAGE_NGINX=false      you own nginx.conf entirely
+
+services:
+  nginx-cert:
+    image: rac021/nginx-cert:2
+    restart: unless-stopped
+    # Unprivileged ports: useful under a load balancer, or on a platform that
+    # forbids file capabilities (Kubernetes with allowPrivilegeEscalation:false).
+    ports: ["8080:8080", "8443:8443"]
+    environment:
+      CERT_EMAIL: ops@example.com
+      CERT_DOMAINS: example.com, www.example.com
+      CERT_HTTP_PORT: "8080"
+      CERT_HTTPS_PORT: "8443"
+
+      # Trust the load balancer's X-Forwarded-For so logs and the application
+      # see the real client address instead of the balancer's.
+      CERT_REAL_IP_FROM: 10.0.0.0/8,172.16.0.0/12
+
+      # The balancer already redirects HTTP to HTTPS: doing it twice breaks
+      # its health checks.
+      CERT_HTTP_REDIRECT: "false"
+
+      # Keep the generated base configuration (TLS policy, ACME challenge,
+      # /healthz) but write the servers yourself.
+      CERT_MANAGE_VHOSTS: "false"
+    volumes:
+      - nginx-cert-data:/data
+      # Your own servers. Anything here is included; nginx-cert only ever
+      # deletes the files it generated itself (prefixed "nginx-cert.").
+      - ./conf.d:/etc/nginx/conf.d:ro
+
+volumes:
+  nginx-cert-data:
+
+# ---------------------------------------------------------------------------
+# ./conf.d/my-site.conf
+# ---------------------------------------------------------------------------
+#
+# server {
+#     listen      8443 ssl;
+#     http2       on;
+#     server_name example.com www.example.com;
+#
+#     # Certificates are managed by nginx-cert; the lineage name is the first
+#     # domain of its CERT_DOMAINS line.
+#     ssl_certificate           /data/certs/example.com/fullchain.pem;
+#     ssl_certificate_key       /data/certs/example.com/privkey.pem;
+#     ssl_trusted_certificate   /data/certs/example.com/chain.pem;
+#
+#     # The TLS policy (protocols, ciphers, stapling) is already applied at the
+#     # http level by the generated base configuration.
+#
+#     location / {
+#         proxy_pass http://app:8080;
+#         proxy_set_header Host              $host;
+#         proxy_set_header X-Real-IP         $remote_addr;
+#         proxy_set_header X-Forwarded-For   $proxy_add_x_forwarded_for;
+#         proxy_set_header X-Forwarded-Proto $scheme;
+#     }
+# }
+#
+# ---------------------------------------------------------------------------
+# With CERT_MANAGE_NGINX=false you own nginx.conf as well. You must then keep
+# this location yourself, or renewal will fail:
+#
+# location ^~ /.well-known/acme-challenge/ {
+#     root /var/www/acme;
+#     default_type "text/plain";
+#     try_files $uri =404;
+# }
+# ---------------------------------------------------------------------------

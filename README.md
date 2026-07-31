@@ -33,17 +33,28 @@ happens on its own.
 
 - [Why](#why)
 - [Quick start](#quick-start)
+- [What it looks like](#what-it-looks-like)
 - [How it works](#how-it-works)
 - [Configuration](#configuration)
   - [Declaring certificates](#declaring-certificates)
   - [Full variable reference](#full-variable-reference)
 - [Certificate authorities](#certificate-authorities)
-  - [Let's Encrypt](#lets-encrypt-default)
+  - [Let's Encrypt](#lets-encrypt)
   - [Actalis](#actalis)
   - [ZeroSSL](#zerossl)
-  - [Buypass, Google, SSL.com](#buypass-google-sslcom)
+  - [Buypass Go SSL](#buypass-go-ssl)
+  - [Google Trust Services](#google-trust-services)
+  - [SSL.com](#sslcom)
   - [Private ACME server](#private-acme-server)
-- [Common setups](#common-setups)
+  - [Mixing authorities in one container](#mixing-authorities-in-one-container)
+  - [Tuning the fallback chain](#tuning-the-fallback-chain)
+  - [Adding an authority](#adding-an-authority)
+- [More complete examples](#more-complete-examples)
+  - [Wildcard certificate (DNS-01)](#wildcard-certificate-dns-01)
+  - [IP-address certificates](#ip-address-certificates)
+  - [Local development](#local-development)
+  - [Behind a load balancer, with your own nginx configuration](#behind-a-load-balancer-with-your-own-nginx-configuration)
+  - [All example files](#all-example-files)
 - [The `certme` command](#the-certme-command)
 - [Customising nginx](#customising-nginx)
 - [Operations](#operations)
@@ -98,16 +109,110 @@ challenge).
 Test with `CERT_STAGING=true` first if you like — quotas are effectively
 unlimited there, but the certificates are not browser-trusted.
 
-### Local development
+### Locally, with no domain
 
 ```bash
 docker compose -f examples/compose.localdev.yml up -d
-docker compose -f examples/compose.localdev.yml cp nginx-cert:/data/ca/rootCA.pem .
 ```
 
 `localhost`, `*.test`, `*.localhost` and private IP addresses are detected: no
 public authority is contacted, and certificates are signed by a stable local CA.
-Import `rootCA.pem` once and every development certificate is trusted, forever.
+See [Local development](#local-development) for trusting it in your browser.
+
+---
+
+## What it looks like
+
+Startup, with three certificates declared (output abridged):
+
+```
+nginx-cert 2.0.0
+--------------------------------------------------------------
+
+Effective configuration
+--------------------------------------------------------------
+  Certificate management     enabled
+  Provider                   auto -> letsencrypt,zerossl,actalis,buypass -> selfsigned
+  Attempts per authority     2 (initial delay 15s, doubled each retry)
+  Self-signed fallback       true
+  Staging environment        false
+  Account e-mail             ops@example.com
+  Key type                   ec-256
+  Renewal                    at D-30 before expiry, checked every 12h (+/-30m)
+  TLS policy                 intermediate
+  Data directory             /data
+
+Declared certificates (3)
+--------------------------------------------------------------
+  example.com                example.com www.example.com  [fqdn] -> site:8080
+  api.example.com            api.example.com  [fqdn] -> api:3000
+  internal.lan               internal.lan  [internal]
+
+INFO  'example.com': installing a temporary local certificate until the real one arrives.
+INFO  'internal.lan': installing a temporary local certificate until the real one arrives.
+INFO  Creating the local certificate authority (valid for 10 years).
+INFO  Local authority ready: /data/ca/rootCA.pem
+
+nginx configuration
+--------------------------------------------------------------
+INFO  Starting nginx...
+INFO  nginx is listening (PID 949).
+
+Certificates
+--------------------------------------------------------------
+
+Certificate 'example.com' -- local certificate in place, a public authority is possible
+--------------------------------------------------------------
+INFO  -> Let's Encrypt: requesting a certificate for example.com www.example.com (http-01 challenge).
+INFO  Let's Encrypt issued certificate 'example.com'.
+INFO  'example.com' issued by Let's Encrypt -- expires 2026-10-29 01:18:36Z
+INFO  nginx configuration reloaded.
+INFO  nginx-cert is up.
+INFO  Next certificate check in 12h 25m 26s.
+```
+
+`certme status`:
+
+```
+CERTIFICATE                  STATE         AUTHORITY                  EXPIRES   DOMAINS
+--------------------------------------------------------------------------------------
+example.com                  valid         R11                        D-89      example.com www.example.com
+api.example.com              valid         R11                        D-89      api.example.com
+internal.lan                 local         nginx-cert local developme D-364     internal.lan
+```
+
+`certme providers` — which authorities your credentials actually unlock:
+
+```
+ID                     AUTHORITY                  EAB       ACCEPTED KINDS    USABLE HERE
+-----------------------------------------------------------------------------------------
+letsencrypt            Let's Encrypt              no        fqdn,wildcard,ip  yes
+zerossl                ZeroSSL                    required  fqdn,wildcard     no -- EAB credentials missing
+actalis                Actalis                    required  fqdn              no -- EAB credentials missing
+buypass                Buypass Go SSL             no        fqdn              yes
+google                 Google Trust Services      required  fqdn,wildcard     no -- EAB credentials missing
+sslcom                 SSL.com                    required  fqdn,wildcard     no -- EAB credentials missing
+selfsigned             Local authority            no        all               yes (last resort)
+zerossl-rest           ZeroSSL (REST API)         no        ip                no -- CERT_ZEROSSL_API_KEY unset
+```
+
+`certme status --json`, for monitoring:
+
+```json
+{
+  "name": "example.com",
+  "domains": ["example.com", "www.example.com"],
+  "kind": "fqdn",
+  "provider": "auto",
+  "exists": true,
+  "days_left": 89,
+  "not_after": "2026-10-29 01:18:36Z",
+  "issuer": "C=US, O=Let's Encrypt, CN=R11",
+  "self_signed": false,
+  "renewal_needed": false,
+  "renewal_reason": ""
+}
+```
 
 ---
 
@@ -277,92 +382,491 @@ ignored typo is worse than a refusal to start.
 
 ## Certificate authorities
 
-`certme providers` lists them along with whether each is usable with your
-current credentials.
+Every authority below speaks the same protocol, so the configuration differs
+only in which credentials you need. `certme providers` prints the table with a
+"usable here" column based on the credentials you actually provided.
 
-### Let's Encrypt (default)
+| Authority | `CERT_PROVIDER` | EAB | Wildcard | IP | Validity | Cost |
+|---|---|---|---|---|---|---|
+| Let's Encrypt | `letsencrypt` | no | yes (DNS-01) | yes (~160 h) | 90 days | free |
+| ZeroSSL | `zerossl` | required | yes (DNS-01) | REST path only | 90 days | free tier |
+| Actalis | `actalis` | required | no | no | 90 days | free tier |
+| Buypass Go SSL | `buypass` | no | no | no | 180 days | free |
+| Google Trust Services | `google` | required | yes (DNS-01) | no | 90 days | free tier |
+| SSL.com | `sslcom` | required | yes (DNS-01) | no | 90 days | account |
+| Local CA | `selfsigned` | — | yes | yes | 365 days | — |
 
-Nothing to configure beyond `CERT_EMAIL`. Supports wildcards (via DNS-01) and
-IP-address certificates (automatically requested with the `shortlived` profile,
-valid ~160 hours — set `CERT_RENEW_DAYS=2` for those).
+### Let's Encrypt
+
+The default. Nothing to configure beyond an e-mail address.
+
+```yaml
+# examples: docker-compose.yml
+services:
+  nginx-cert:
+    image: rac021/nginx-cert:2
+    restart: unless-stopped
+    ports: ["80:80", "443:443"]
+    environment:
+      CERT_EMAIL: you@example.com
+      CERT_DOMAINS: example.com, www.example.com
+      CERT_UPSTREAM: app:8080
+      CERT_STAGING: "false"      # "true" while testing: huge quotas, untrusted certs
+    volumes:
+      - nginx-cert-data:/data
+
+  app:
+    image: traefik/whoami
+    command: --port=8080
+    expose: ["8080"]
+
+volumes:
+  nginx-cert-data:
+```
 
 ### Actalis
 
-European authority, free tier: one domain per certificate, 90 days. Requires
-External Account Binding, obtained by enabling ACME in the Actalis customer
-portal.
+European authority. Free tier: **one domain per certificate**, 90 days.
+Requires External Account Binding — enable ACME in the Actalis customer portal
+to obtain the KID and HMAC key.
 
 ```yaml
-CERT_PROVIDER: actalis
-CERT_EMAIL: you@example.com
-CERT_DOMAINS: data.example.eu
-CERT_EAB_KID: ${ACTALIS_EAB_KID}
-CERT_EAB_HMAC_KEY: ${ACTALIS_EAB_HMAC}
+# examples/compose.actalis.yml
+services:
+  nginx-cert:
+    image: rac021/nginx-cert:2
+    restart: unless-stopped
+    ports: ["80:80", "443:443"]
+    environment:
+      CERT_EMAIL: you@example.com
+      CERT_DOMAINS: data.example.eu
+      CERT_UPSTREAM: app:8080
+
+      CERT_EAB_KID: ${ACTALIS_EAB_KID:?ACTALIS_EAB_KID is required}
+      CERT_EAB_HMAC_KEY: ${ACTALIS_EAB_HMAC:?ACTALIS_EAB_HMAC is required}
+
+      # Actalis first, Let's Encrypt as a safety net if Actalis is down on
+      # renewal day. Use CERT_PROVIDER=actalis instead to pin it strictly.
+      CERT_PROVIDER: auto
+      CERT_PROVIDER_CHAIN: actalis,letsencrypt
+    volumes:
+      - nginx-cert-data:/data
+
+  app:
+    image: traefik/whoami
+    command: --port=8080
+    expose: ["8080"]
+
+volumes:
+  nginx-cert-data:
 ```
 
-To keep Actalis as the primary authority while still surviving an outage on
-renewal day, use the chain instead of pinning:
+Actalis issues one domain per certificate on the free tier, so declare each
+host on its own line rather than as a multi-SAN certificate:
 
 ```yaml
-CERT_PROVIDER: auto
-CERT_PROVIDER_CHAIN: actalis,letsencrypt
+CERT_DOMAINS: |
+  example.eu       | upstream=app:8080 provider=actalis
+  www.example.eu   | upstream=app:8080 provider=actalis
 ```
-
-See [`examples/compose.actalis.yml`](examples/compose.actalis.yml).
 
 ### ZeroSSL
 
-Requires EAB — but if you already have an API key, nginx-cert derives the EAB
-for you and caches it:
+Requires EAB. If you already have an API key, nginx-cert derives the EAB from
+it on first use and caches it in `/data/state/zerossl-eab.env` — one variable
+instead of two.
 
 ```yaml
-CERT_PROVIDER: zerossl
-CERT_ZEROSSL_API_KEY: ${ZEROSSL_API_KEY}
+# examples/compose.zerossl.yml
+services:
+  nginx-cert:
+    image: rac021/nginx-cert:2
+    restart: unless-stopped
+    ports: ["80:80", "443:443"]
+    environment:
+      CERT_PROVIDER: zerossl
+      CERT_EMAIL: you@example.com
+      CERT_DOMAINS: example.com, www.example.com
+      CERT_UPSTREAM: app:8080
+
+      # Option A -- API key, EAB derived automatically
+      CERT_ZEROSSL_API_KEY: ${ZEROSSL_API_KEY}
+
+      # Option B -- explicit EAB from the ZeroSSL dashboard
+      # CERT_EAB_KID: ${ZEROSSL_EAB_KID}
+      # CERT_EAB_HMAC_KEY: ${ZEROSSL_EAB_HMAC}
+    volumes:
+      - nginx-cert-data:/data
+
+  app:
+    image: traefik/whoami
+    command: --port=8080
+    expose: ["8080"]
+
+volumes:
+  nginx-cert-data:
 ```
 
 ZeroSSL's ACME endpoint does not issue certificates for IP addresses. When
 `CERT_ZEROSSL_API_KEY` is set and an IP-address certificate is requested,
 nginx-cert falls back to ZeroSSL's REST API for that one case (paid plan
 required), tunable with `CERT_ZEROSSL_VALIDITY_DAYS` and `CERT_ZEROSSL_TIMEOUT`.
-Let's Encrypt's `shortlived` profile is the free alternative.
+Let's Encrypt's `shortlived` profile is the free alternative — see
+[IP-address certificates](#ip-address-certificates).
 
-### Buypass, Google, SSL.com
+### Buypass Go SSL
 
-| Authority | `CERT_PROVIDER` | EAB | Notes |
-|---|---|---|---|
-| Buypass Go SSL | `buypass` | no | 180-day certificates, no wildcards |
-| Google Trust Services | `google` | required | EAB from the Google Cloud console |
-| SSL.com | `sslcom` | required | EAB from the SSL.com portal |
+Free, no EAB, **180-day** certificates — half as many renewals. No wildcards.
+
+```yaml
+services:
+  nginx-cert:
+    image: rac021/nginx-cert:2
+    restart: unless-stopped
+    ports: ["80:80", "443:443"]
+    environment:
+      CERT_PROVIDER: buypass
+      CERT_EMAIL: you@example.com
+      CERT_DOMAINS: example.com
+      CERT_UPSTREAM: app:8080
+      # 180-day certificates: renewing at D-30 is unnecessarily eager.
+      CERT_RENEW_DAYS: "45"
+    volumes:
+      - nginx-cert-data:/data
+
+  app:
+    image: traefik/whoami
+    command: --port=8080
+    expose: ["8080"]
+
+volumes:
+  nginx-cert-data:
+```
+
+### Google Trust Services
+
+Requires EAB, generated from the Google Cloud console (Public Certificate
+Authority API):
+
+```bash
+gcloud publicca external-account-keys create
+```
+
+```yaml
+services:
+  nginx-cert:
+    image: rac021/nginx-cert:2
+    restart: unless-stopped
+    ports: ["80:80", "443:443"]
+    environment:
+      CERT_PROVIDER: google
+      CERT_EMAIL: you@example.com
+      CERT_DOMAINS: example.com, www.example.com
+      CERT_UPSTREAM: app:8080
+      CERT_EAB_KID: ${GTS_EAB_KID:?GTS_EAB_KID is required}
+      CERT_EAB_HMAC_KEY: ${GTS_EAB_HMAC:?GTS_EAB_HMAC is required}
+    volumes:
+      - nginx-cert-data:/data
+
+  app:
+    image: traefik/whoami
+    command: --port=8080
+    expose: ["8080"]
+
+volumes:
+  nginx-cert-data:
+```
+
+### SSL.com
+
+Requires EAB, obtained from the SSL.com customer portal. Same shape as Google:
+
+```yaml
+environment:
+  CERT_PROVIDER: sslcom
+  CERT_EMAIL: you@example.com
+  CERT_DOMAINS: example.com
+  CERT_UPSTREAM: app:8080
+  CERT_EAB_KID: ${SSLCOM_EAB_KID}
+  CERT_EAB_HMAC_KEY: ${SSLCOM_EAB_HMAC}
+```
 
 ### Private ACME server
 
-Any RFC 8555 server (step-ca, Smallstep, EJBCA, Vault) works:
+Any RFC 8555 server — step-ca, Smallstep, EJBCA, HashiCorp Vault.
 
 ```yaml
-CERT_ACME_SERVER: https://ca.internal.example.com/acme/acme/directory
-CERT_EAB_KID: ...          # if your server requires it
-CERT_EAB_HMAC_KEY: ...
+# examples/compose.private-acme.yml
+services:
+  nginx-cert:
+    image: rac021/nginx-cert:2
+    restart: unless-stopped
+    ports: ["80:80", "443:443"]
+    environment:
+      CERT_EMAIL: ops@example.com
+      CERT_DOMAINS: service.corp.example.com | upstream=app:8080
+
+      # Any authority id acts as the carrier; the URL below overrides its
+      # directory. letsencrypt is convenient because it needs no EAB.
+      CERT_PROVIDER: letsencrypt
+      CERT_ACME_SERVER: https://ca.corp.example.com/acme/acme/directory
+      # CERT_EAB_KID / CERT_EAB_HMAC_KEY if your server requires them.
+
+      CERT_RENEW_DAYS: "10"
+      CERT_RENEW_INTERVAL: 6h
+      # Do not silently downgrade to self-signed if the internal CA is down.
+      CERT_FALLBACK_SELFSIGNED: "false"
+    volumes:
+      - nginx-cert-data:/data
+      # So the container trusts the ACME server's own HTTPS certificate.
+      - ./corp-root-ca.pem:/etc/ssl/certs/corp-root-ca.pem:ro
+
+volumes:
+  nginx-cert-data:
 ```
+
+### Mixing authorities in one container
+
+`provider=` on a `CERT_DOMAINS` line overrides the global choice. Credentials
+are declared once; each authority reads only what it needs.
+
+```yaml
+# examples/compose.multi-ca.yml
+services:
+  nginx-cert:
+    image: rac021/nginx-cert:2
+    restart: unless-stopped
+    ports: ["80:80", "443:443"]
+    environment:
+      CERT_EMAIL: ops@example.com
+      CERT_DOMAINS: |
+        # Default chain (Let's Encrypt first)
+        www.example.com, example.com | upstream=site:8080
+
+        # European CA required by this customer
+        customer.example.eu          | upstream=customer:8080 provider=actalis
+
+        # Wildcard: ZeroSSL over DNS-01
+        *.apps.example.com           | upstream=apps:8080 provider=zerossl challenge=dns-01 dns=dns_cf
+
+        # 180-day certificates, no EAB
+        status.example.com           | upstream=status:8080 provider=buypass
+
+        # Not publicly resolvable: signed by the local CA
+        internal.lan                 | upstream=internal:8080
+
+      CERT_EAB_KID: ${ACTALIS_EAB_KID}
+      CERT_EAB_HMAC_KEY: ${ACTALIS_EAB_HMAC}
+      CERT_ZEROSSL_API_KEY: ${ZEROSSL_API_KEY}
+      CF_Token: ${CF_TOKEN}
+    volumes:
+      - nginx-cert-data:/data
+
+volumes:
+  nginx-cert-data:
+```
+
+`certme status` then shows which authority actually signed each certificate.
+
+### Tuning the fallback chain
+
+In `auto` mode, `CERT_PROVIDER_CHAIN` is walked in order. Each authority gets
+`CERT_ATTEMPTS` tries with exponential backoff before the next one is used, and
+`selfsigned` always closes the chain unless you disable it.
+
+```yaml
+CERT_PROVIDER: auto
+CERT_PROVIDER_CHAIN: actalis,zerossl,letsencrypt,buypass
+CERT_ATTEMPTS: "3"                 # tries per authority
+CERT_RETRY_DELAY: "20"             # seconds, doubled each retry
+CERT_ACME_TIMEOUT: 3m              # per-attempt budget
+CERT_FALLBACK_SELFSIGNED: "true"   # "false" to fail loudly instead
+```
+
+Authorities that cannot issue the requested kind of name, or whose EAB
+credentials are missing, are dropped from the chain before it is walked, with
+the reason logged at debug level. That is why the order above is safe even when
+you have credentials for only some of them.
 
 ### Adding an authority
 
-`providers/providers.tsv` is a plain tab-separated table. Adding an authority is
-adding one line — there is no code to change:
+`providers/providers.tsv` is a tab-separated table. Adding an authority is
+adding one line — there is no code to change, and the existing tests cover it
+immediately:
 
 ```
 myca	My CA	-	https://acme.myca.example/directory	required	-	fqdn,wildcard	EAB from the customer portal.
 ```
 
+Columns: id, label, acme.sh alias (or `-` for a raw URL), directory URL, EAB
+(`required`/`no`), staging id (or `-`), accepted kinds, help text.
+
 ---
 
-## Common setups
+## More complete examples
 
-| Goal | Example |
+### Wildcard certificate (DNS-01)
+
+A wildcard cannot be validated over HTTP-01: the authority needs a TXT record,
+so nginx-cert needs API access to your DNS provider. The DNS modules come from
+acme.sh (~150 providers); their credentials are passed straight through as
+environment variables.
+
+```yaml
+# examples/compose.wildcard-dns.yml
+services:
+  nginx-cert:
+    image: rac021/nginx-cert:2
+    restart: unless-stopped
+    ports: ["80:80", "443:443"]
+    environment:
+      CERT_EMAIL: ops@example.com
+      CERT_DOMAINS: |
+        *.example.com, example.com | upstream=app:8080
+      CERT_DNS_PROVIDER: dns_cf
+      CERT_DNS_SLEEP: "30"          # propagation delay before validation
+      CF_Token: ${CF_TOKEN}
+      CF_Account_ID: ${CF_ACCOUNT_ID}
+    volumes:
+      - nginx-cert-data:/data
+
+  app:
+    image: traefik/whoami
+    command: --port=8080
+    expose: ["8080"]
+
+volumes:
+  nginx-cert-data:
+```
+
+| Provider | `CERT_DNS_PROVIDER` | Credentials |
+|---|---|---|
+| Cloudflare | `dns_cf` | `CF_Token`, `CF_Account_ID` |
+| OVH | `dns_ovh` | `OVH_AK`, `OVH_AS`, `OVH_CK`, `OVH_END_POINT` |
+| Gandi | `dns_gandi_livedns` | `GANDI_LIVEDNS_KEY` |
+| Route 53 | `dns_aws` | `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY` |
+| Scaleway | `dns_scaleway` | `SCALEWAY_API_TOKEN` |
+
+[Full list](https://github.com/acmesh-official/acme.sh/wiki/dnsapi).
+
+### IP-address certificates
+
+```yaml
+# examples/compose.ip-address.yml
+environment:
+  CERT_EMAIL: ops@example.com
+  CERT_DOMAINS: 203.0.113.10
+  CERT_UPSTREAM: app:8080
+  # Let's Encrypt issues IP certificates under the "shortlived" profile
+  # (~160 h), selected automatically. Renew far more often.
+  CERT_RENEW_DAYS: "2"
+  CERT_RENEW_INTERVAL: 6h
+
+  # Or, for 90-day IP certificates via ZeroSSL's REST API (paid plan):
+  # CERT_ZEROSSL_API_KEY: ${ZEROSSL_API_KEY}
+  # CERT_RENEW_DAYS: "30"
+```
+
+Private addresses (`10/8`, `192.168/16`, `169.254/16`, CGNAT…) are detected and
+signed by the local CA: no authority will certify them, and no pointless
+network round-trip is made.
+
+### Local development
+
+```yaml
+# examples/compose.localdev.yml
+services:
+  nginx-cert:
+    image: rac021/nginx-cert:2
+    ports: ["80:80", "443:443"]
+    environment:
+      CERT_DOMAINS: |
+        localhost      | upstream=app:8080
+        app.test       | upstream=app:8080
+        api.localhost  | upstream=api:3000
+      CERT_HSTS: "off"          # avoid a sticky HSTS entry during experiments
+      CERT_LOG_LEVEL: debug
+    volumes:
+      - nginx-cert-data:/data
+
+  app: { image: traefik/whoami, command: --port=8080, expose: ["8080"] }
+  api: { image: traefik/whoami, command: --port=3000, expose: ["3000"] }
+
+volumes:
+  nginx-cert-data:
+```
+
+```bash
+docker compose -f examples/compose.localdev.yml up -d
+docker compose -f examples/compose.localdev.yml cp nginx-cert:/data/ca/rootCA.pem .
+sudo cp rootCA.pem /usr/local/share/ca-certificates/nginx-cert.crt && sudo update-ca-certificates
+```
+
+Import the root once and every development certificate is trusted, including
+the ones generated later.
+
+### Behind a load balancer, with your own nginx configuration
+
+```yaml
+# examples/compose.behind-lb.yml
+services:
+  nginx-cert:
+    image: rac021/nginx-cert:2
+    restart: unless-stopped
+    # Unprivileged ports: useful under a balancer, or on a platform that
+    # forbids file capabilities.
+    ports: ["8080:8080", "8443:8443"]
+    environment:
+      CERT_EMAIL: ops@example.com
+      CERT_DOMAINS: example.com, www.example.com
+      CERT_HTTP_PORT: "8080"
+      CERT_HTTPS_PORT: "8443"
+      CERT_REAL_IP_FROM: 10.0.0.0/8,172.16.0.0/12
+      CERT_HTTP_REDIRECT: "false"   # the balancer already redirects
+      CERT_MANAGE_VHOSTS: "false"   # keep the base, write the servers yourself
+    volumes:
+      - nginx-cert-data:/data
+      - ./conf.d:/etc/nginx/conf.d:ro
+
+volumes:
+  nginx-cert-data:
+```
+
+```nginx
+# ./conf.d/my-site.conf
+server {
+    listen      8443 ssl;
+    http2       on;
+    server_name example.com www.example.com;
+
+    ssl_certificate           /data/certs/example.com/fullchain.pem;
+    ssl_certificate_key       /data/certs/example.com/privkey.pem;
+    ssl_trusted_certificate   /data/certs/example.com/chain.pem;
+    # Protocols, ciphers and stapling are already applied at the http level.
+
+    location / {
+        proxy_pass http://app:8080;
+        proxy_set_header Host              $host;
+        proxy_set_header X-Real-IP         $remote_addr;
+        proxy_set_header X-Forwarded-For   $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
+}
+```
+
+### All example files
+
+| Goal | File |
 |---|---|
-| Single site in production | [`docker-compose.yml`](docker-compose.yml) |
-| Several sites, several backends | [`examples/compose.multisite.yml`](examples/compose.multisite.yml) |
+| Single site, Let's Encrypt | [`docker-compose.yml`](docker-compose.yml) |
 | Actalis | [`examples/compose.actalis.yml`](examples/compose.actalis.yml) |
+| ZeroSSL | [`examples/compose.zerossl.yml`](examples/compose.zerossl.yml) |
+| Several authorities at once | [`examples/compose.multi-ca.yml`](examples/compose.multi-ca.yml) |
+| Several sites, several backends | [`examples/compose.multisite.yml`](examples/compose.multisite.yml) |
 | Wildcard via DNS-01 | [`examples/compose.wildcard-dns.yml`](examples/compose.wildcard-dns.yml) |
+| IP address | [`examples/compose.ip-address.yml`](examples/compose.ip-address.yml) |
+| Private ACME server | [`examples/compose.private-acme.yml`](examples/compose.private-acme.yml) |
+| Behind a load balancer | [`examples/compose.behind-lb.yml`](examples/compose.behind-lb.yml) |
 | Local HTTPS development | [`examples/compose.localdev.yml`](examples/compose.localdev.yml) |
 
 ---

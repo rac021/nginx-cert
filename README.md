@@ -333,9 +333,17 @@ Resolution happens per request, so the order does not matter and a restart of
 your application never requires touching nginx. While the backend is down the
 site answers 502 or 504; it recovers on its own.
 
-Note that `app:8080` only resolves if both containers share a **user-defined
-network** — Docker's default bridge has no name resolution. An IP address such
-as `10.0.0.5:8080` works from anywhere routable.
+Two addressing traps, both of which produce a 502 that looks like a bug:
+
+- **`app:8080` only resolves if both containers share a user-defined network.**
+  Docker's default bridge provides no name resolution.
+- **`127.0.0.1:8080` means the container itself**, not the host. To reach a
+  service running directly on the host, use the host's LAN address, or
+  `host.docker.internal:8080` with
+  `--add-host=host.docker.internal:host-gateway`.
+
+An address that is routable from inside the container — `10.0.0.5:8080`, another
+container's name on a shared network — always works.
 
 **2. Static site** — omit `CERT_UPSTREAM` and mount your files on
 `/var/www/html`. Without it you get a placeholder page, which is enough to check

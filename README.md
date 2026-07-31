@@ -37,6 +37,7 @@ happens on its own.
 - [How it works](#how-it-works)
 - [Configuration](#configuration)
   - [Declaring certificates](#declaring-certificates)
+  - [What nginx-cert serves](#what-nginx-cert-serves)
   - [Full variable reference](#full-variable-reference)
 - [Certificate authorities](#certificate-authorities)
   - [Let's Encrypt](#lets-encrypt)
@@ -306,6 +307,57 @@ Each line becomes one lineage under `/data/certs/<name>/` and one generated
 HTTPS server. An unknown option is a fatal configuration error — a silently
 ignored typo is worse than a refusal to start.
 
+### What nginx-cert serves
+
+nginx-cert manages certificates and the nginx in front of them. **It does not
+run your application** — `CERT_UPSTREAM` is just the address written into the
+generated `proxy_pass`, and you are responsible for having something listening
+there. There are three ways to use it:
+
+**1. Reverse proxy in front of your application** — `CERT_UPSTREAM=host:port`.
+The generated HTTPS server forwards everything to that address, with the usual
+`X-Forwarded-*` headers and WebSocket support:
+
+```bash
+docker network create web
+docker run -d --name app --network web traefik/whoami --port=8080
+docker run -d --name nginx-cert --network web  \
+           -p 80:80 -p 443:443                 \
+           -v nginx-cert-data:/data            \
+           -e CERT_EMAIL=you@example.com       \
+           -e CERT_DOMAINS=example.com         \
+           -e CERT_UPSTREAM=app:8080           \
+           rac021/nginx-cert:2
+```
+
+Resolution happens per request, so the order does not matter and a restart of
+your application never requires touching nginx. While the backend is down the
+site answers 502 or 504; it recovers on its own.
+
+Note that `app:8080` only resolves if both containers share a **user-defined
+network** — Docker's default bridge has no name resolution. An IP address such
+as `10.0.0.5:8080` works from anywhere routable.
+
+**2. Static site** — omit `CERT_UPSTREAM` and mount your files on
+`/var/www/html`. Without it you get a placeholder page, which is enough to check
+that TLS works:
+
+```bash
+docker run -d --name nginx-cert                \
+           -p 80:80 -p 443:443                 \
+           -v nginx-cert-data:/data            \
+           -v ./public:/var/www/html:ro        \
+           -e CERT_EMAIL=you@example.com       \
+           -e CERT_DOMAINS=example.com         \
+           rac021/nginx-cert:2
+```
+
+**3. Certificates only** — set `CERT_MANAGE_VHOSTS=false` and write your own
+server blocks in `/etc/nginx/conf.d/`, or `CERT_MANAGE_NGINX=false` to own
+`nginx.conf` entirely. Certificates remain available at
+`/data/certs/<name>/{fullchain,privkey,chain}.pem`. See
+[Customising nginx](#customising-nginx).
+
 ### Full variable reference
 
 #### Core
@@ -315,7 +367,7 @@ ignored typo is worse than a refusal to start.
 | `CERT_ENABLE`   | `true` | Set to `false` to run plain nginx with no certificate management. |
 | `CERT_DOMAINS`  | — | Certificates to manage (see above). Empty means nginx only. |
 | `CERT_EMAIL`    | — | Account e-mail. Required for any public authority. |
-| `CERT_UPSTREAM` | — | Default backend for generated HTTPS servers. |
+| `CERT_UPSTREAM` | — | Address of **your** application, proxied by the generated HTTPS servers (`host:port`). Omit it to serve `/var/www/html` instead. nginx-cert does not run the backend. |
 
 #### Authority selection
 
@@ -915,7 +967,7 @@ docker run -d --name nginx-cert               \
            -v nginx-cert-data:/data           \
            -e CERT_EMAIL=you@example.com      \
            -e CERT_DOMAINS=example.com,www.example.com \
-           -e CERT_UPSTREAM=10.0.0.5:8080     \
+           -e CERT_UPSTREAM=10.0.0.5:8080              \
            rac021/nginx-cert:2
 ```
 
@@ -995,7 +1047,7 @@ To keep Actalis as the primary authority while surviving an outage on renewal
 day, replace `CERT_PROVIDER=actalis` with:
 
 ```bash
-           -e CERT_PROVIDER=auto                    \
+           -e CERT_PROVIDER=auto                      \
            -e CERT_PROVIDER_CHAIN=actalis,letsencrypt \
 ```
 
@@ -1004,14 +1056,14 @@ day, replace `CERT_PROVIDER=actalis` with:
 An API key is enough — the EAB is derived from it once and cached:
 
 ```bash
-docker run -d --name nginx-cert                     \
-           --restart unless-stopped                 \
-           -p 80:80 -p 443:443                      \
-           -v nginx-cert-data:/data                 \
-           -e CERT_EMAIL=you@example.com            \
-           -e CERT_DOMAINS=example.com              \
-           -e CERT_UPSTREAM=10.0.0.5:8080           \
-           -e CERT_PROVIDER=zerossl                 \
+docker run -d --name nginx-cert                       \
+           --restart unless-stopped                   \
+           -p 80:80 -p 443:443                        \
+           -v nginx-cert-data:/data                   \
+           -e CERT_EMAIL=you@example.com              \
+           -e CERT_DOMAINS=example.com                \
+           -e CERT_UPSTREAM=10.0.0.5:8080             \
+           -e CERT_PROVIDER=zerossl                   \
            -e CERT_ZEROSSL_API_KEY="$ZEROSSL_API_KEY" \
            rac021/nginx-cert:2
 ```
@@ -1345,10 +1397,13 @@ ones removed since version 1 (`CERT_PROXY_PASS_PORT`, `CERT_CRON_SCHEDULE`,
 `CERT_RENEWAL_THRESHOLD_DAYS`, `CERT_SELF_SIGNED_CERTIFICATE`). Check the logs
 for a warning, and `certme config` for what is actually in effect.
 
-**502 on HTTPS.**
-nginx is running but the upstream is not reachable. This is deliberate: the
-proxy starts even when the backend does not exist yet, instead of refusing to
-start. Check `CERT_UPSTREAM` and that both containers share a network.
+**502 or 504 on HTTPS.**
+nginx is running but your application is not reachable at `CERT_UPSTREAM`.
+This is deliberate: the proxy starts even when the backend does not exist yet,
+instead of refusing to start, and recovers on its own once it is back. Check
+that the backend is listening, and that both containers share a **user-defined**
+network — the default bridge provides no name resolution, so `app:8080` will
+never resolve there.
 
 **Wildcard certificate not issued.**
 Wildcards require DNS-01. Set `CERT_DNS_PROVIDER` and your DNS provider's API

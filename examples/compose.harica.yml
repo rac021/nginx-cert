@@ -1,0 +1,57 @@
+# HARICA -- the authority behind GÉANT TCS.
+#
+# If you work at a university or research institute that is a member of a
+# European research network -- RENATER in France, SURF in the Netherlands, DFN
+# in Germany, Belnet in Belgium -- the certificates cost your team nothing:
+# they are funded at the institution level, and browser-trusted.
+#
+# Create an ACME EAB account at https://cm.harica.gr (the ACME entry in the
+# left menu). It gives you a Key ID, an HMAC key -- shown once -- and a
+# directory URL.
+#
+#   export HARICA_EAB_KID=...
+#   export HARICA_EAB_HMAC=...
+#   docker compose -f examples/compose.harica.yml up -d
+#
+# On a filtered corporate network this has a concrete advantage over a public
+# authority: the validation request comes from HARICA's servers, so an
+# appliance that filters the well-known validators never sees it.
+
+services:
+  nginx-cert:
+    image: rac021/nginx-cert:2
+    restart: unless-stopped
+    ports: ["80:80", "443:443"]
+    environment:
+      CERT_PROVIDER: harica
+      CERT_EMAIL: you@institution.example
+      CERT_DOMAINS: service.institution.example
+      CERT_UPSTREAM: app:8080
+      CERT_EAB_KID: ${HARICA_EAB_KID:?HARICA_EAB_KID is required}
+      CERT_EAB_HMAC_KEY: ${HARICA_EAB_HMAC:?HARICA_EAB_HMAC is required}
+
+      # HARICA also issues a directory URL specific to your organisation. Set
+      # it here if the one shown in the portal differs from the default:
+      # CERT_ACME_SERVER: https://acme-v02.harica.gr/acme/<your-uuid>/directory
+    volumes:
+      - nginx-cert-data:/data
+
+  app:
+    image: traefik/whoami
+    command: --port=8080
+    expose: ["8080"]
+
+volumes:
+  nginx-cert-data:
+
+# Two things to check on the HARICA side before suspecting the configuration:
+#
+#   * the Domains tab of your EAB account must list the domain you request.
+#     HARICA only issues for domains the organisation has proven control of,
+#     and that validation expires. A domain that is not attached produces an
+#     HTTP 500 with "Identifiers could not be parsed", which says nothing
+#     useful -- it means "unknown domain".
+#
+#   * copy the HMAC key with the copy button, never by reading it off the
+#     screen: I, l and 1 are indistinguishable in most interfaces, and a single
+#     wrong character yields "invalid EAB HMAC signature".

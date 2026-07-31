@@ -5,6 +5,7 @@
 #   ./tests/run.sh unit         unit tests only (no dependency)
 #   ./tests/run.sh lint         shellcheck + hadolint, when installed
 #   ./tests/run.sh integration  Docker tests (builds the image)
+#   ./tests/run.sh providers    reach every declared authority (needs internet)
 set -uo pipefail
 
 NC_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -82,19 +83,31 @@ run_integration() {
     printf '  docker not available -- skipped\n'
     return 0
   fi
-  bash "${NC_ROOT}/tests/integration/container.test.sh"
+  local rc=0
+  bash "${NC_ROOT}/tests/integration/container.test.sh" || rc=1
+  bash "${NC_ROOT}/tests/integration/examples.test.sh"  || rc=1
+  return $rc
+}
+
+# -- Live authority check ----------------------------------------------------
+# Kept out of "all": it reaches the internet, and a transient outage must not
+# fail an unrelated change. Run it on a schedule and before a release.
+run_providers() {
+  hr 'Declared authorities (live)'
+  bash "${NC_ROOT}/tests/integration/providers-live.test.sh"
 }
 
 case $TARGET in
   lint)        run_lint || GLOBAL_RC=1 ;;
   unit)        run_unit ;;
   integration) run_integration || GLOBAL_RC=1 ;;
+  providers)   run_providers   || GLOBAL_RC=1 ;;
   all)
     run_lint || GLOBAL_RC=1
     run_unit
     run_integration || GLOBAL_RC=1
     ;;
-  *) printf 'Usage: %s [all|lint|unit|integration]\n' "$0" >&2; exit 2 ;;
+  *) printf 'Usage: %s [all|lint|unit|integration|providers]\n' "$0" >&2; exit 2 ;;
 esac
 
 hr 'Result'

@@ -954,6 +954,7 @@ server {
 |---|---|
 | Single site, Let's Encrypt | [`docker-compose.yml`](docker-compose.yml) |
 | Actalis | [`examples/compose.actalis.yml`](examples/compose.actalis.yml) |
+| HARICA / GÉANT TCS | [`examples/compose.harica.yml`](examples/compose.harica.yml) |
 | ZeroSSL | [`examples/compose.zerossl.yml`](examples/compose.zerossl.yml) |
 | Several authorities at once | [`examples/compose.multi-ca.yml`](examples/compose.multi-ca.yml) |
 | Several sites, several backends | [`examples/compose.multisite.yml`](examples/compose.multisite.yml) |
@@ -1425,8 +1426,9 @@ More detail: `CERT_LOG_LEVEL=debug`, and the full ACME trace is at
 ```bash
 ./tests/run.sh unit          # unit tests, no dependency beyond bash and openssl
 ./tests/run.sh lint          # shellcheck + hadolint
-./tests/run.sh integration   # builds the image and exercises a real container
+./tests/run.sh integration   # builds the image, exercises a container, checks every example
 ./tests/run.sh               # all of the above
+./tests/run.sh providers     # reach every declared authority (needs internet)
 ```
 
 Layout:
@@ -1439,6 +1441,13 @@ providers/             providers.tsv (declarative table) + acme, zerossl_rest, s
 templates/             nginx configuration templates (%%PLACEHOLDER%% syntax)
 tests/                 unit + integration
 ```
+
+`integration` also replays every Compose file in this repository through a real
+container and compares the parsed configuration with what the file claims to set
+up — an example that stops working fails the build. `providers` is kept separate
+because it reaches the internet: it verifies that each authority in
+`providers/providers.tsv` still answers and still advertises the EAB policy the
+table declares. That check exists because Buypass simply shut down.
 
 [docs/architecture.md](docs/architecture.md) explains the design decisions —
 process model, boot sequence, the provider abstraction, and why certificates are

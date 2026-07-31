@@ -7,6 +7,10 @@ on:
   pull_request:
     branches: [main]
   workflow_dispatch:
+  schedule:
+    # Weekly: an authority can retire without warning, and a dead entry in the
+    # table costs every automatic run a connection timeout.
+    - cron: '17 6 * * 1'
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -48,6 +52,15 @@ jobs:
 
       - name: Integration tests
         run: ./tests/run.sh integration
+
+  providers:
+    name: Declared authorities are alive
+    runs-on: ubuntu-latest
+    # Reaches the internet, so it must not gate a pull request.
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    steps:
+      - uses: actions/checkout@v4
+      - run: ./tests/run.sh providers
 
   build:
     name: Build and publish

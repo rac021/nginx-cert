@@ -3,7 +3,7 @@
 nginx with automatic TLS certificates. One container, one variable, HTTPS.
 
 Certificates are issued and renewed automatically from **Let's Encrypt, ZeroSSL,
-Actalis, Google Trust Services or SSL.com** — all through one ACME
+Actalis, Google Trust Services, HARICA or SSL.com** — all through one ACME
 driver. If an authority is unavailable, the next one in the chain is tried, and
 a locally-signed certificate takes over as a last resort so your service is
 never down because of a certificate.
@@ -46,7 +46,7 @@ happens on its own.
   - [Google Trust Services](#google-trust-services)
   - [SSL.com](#sslcom)
   - [Private ACME server](#private-acme-server)
-  - [Institutional CA (GÉANT TCS, HARICA…)](#institutional-ca-géant-tcs-harica-surf-dfn)
+  - [HARICA / GÉANT TCS](#harica-and-géant-tcs-renater-surf-dfn-belnet)
   - [Mixing authorities in one container](#mixing-authorities-in-one-container)
   - [Tuning the fallback chain](#tuning-the-fallback-chain)
   - [Adding an authority](#adding-an-authority)
@@ -372,7 +372,7 @@ server blocks in `/etc/nginx/conf.d/`, or `CERT_MANAGE_NGINX=false` to own
 
 | Variable | Default | Description |
 |---|---|---|
-| `CERT_PROVIDER` | `auto` | `auto`, or one of `letsencrypt`, `zerossl`, `actalis`, `google`, `sslcom`, `selfsigned`. |
+| `CERT_PROVIDER` | `auto` | `auto`, or one of `letsencrypt`, `zerossl`, `actalis`, `google`, `harica`, `sslcom`, `selfsigned`. |
 | `CERT_PROVIDER_CHAIN` | `letsencrypt,zerossl,actalis,google` | Order tried in `auto` mode. |
 | `CERT_ATTEMPTS` | `2` | Attempts per authority before moving to the next one. |
 | `CERT_RETRY_DELAY` | `15` | Initial delay in seconds between attempts (doubles, capped at 300). |
@@ -462,7 +462,7 @@ only in which credentials you need. `certme providers` prints the table with a
 | Actalis | `actalis` | required | no | no | 90 days | free tier |
 | Google Trust Services | `google` | required | yes (DNS-01) | no | 90 days | free tier |
 | SSL.com | `sslcom` | required | yes (DNS-01) | no | 90 days | account |
-| Institutional (HARICA / GÉANT TCS) | via `CERT_ACME_SERVER` | required | varies | no | 1 year | free for members |
+| HARICA (GÉANT TCS) | `harica` | required | yes (DNS-01) | no | 1 year | free for members |
 | Local CA | `selfsigned` | — | yes | yes | 365 days | — |
 
 ### Let's Encrypt
@@ -665,40 +665,52 @@ volumes:
   nginx-cert-data:
 ```
 
-### Institutional CA (GÉANT TCS, HARICA, SURF, DFN…)
+### HARICA (and GÉANT TCS: RENATER, SURF, DFN, Belnet…)
 
-Universities and research institutes usually already have a certificate service
-that speaks ACME, funded at the institution level. In Europe this is **GÉANT
-TCS**, relayed by the national research network — RENATER in France, SURF in the
-Netherlands, DFN in Germany, Belnet in Belgium. Since January 2025 the issuing
-authority behind TCS is **HARICA**.
+HARICA is the authority behind **GÉANT TCS**, the certificate service of the
+European research networks — RENATER in France, SURF in the Netherlands, DFN in
+Germany, Belnet in Belgium. If you work at a member university or institute, the
+certificates cost your team nothing: they are funded at the institution level.
 
-It is often the best option on a corporate network: the certificates are
-browser-trusted, cost nothing to the team, and the validation traffic comes from
-the institution's own provider rather than a public CA — which matters when a
-security appliance filters well-known validators.
+It is often the best option on a corporate network, and for a concrete reason:
+the validation request comes from HARICA's servers, so a security appliance that
+filters the well-known public validators does not see it.
 
-The directory URL is **specific to your organisation**, so there is no entry in
-`providers.tsv`; use the `CERT_ACME_SERVER` escape hatch. Your IT department
-provides the three values, from the HARICA Certificate Manager:
+Create an ACME EAB account at [cm.harica.gr](https://cm.harica.gr) — the **ACME**
+entry in the left menu. It gives you a Key ID, an HMAC key (**shown once**), and
+a directory URL.
 
-```bash
-docker run -d --name nginx-cert                          \
-           --restart unless-stopped                      \
-           -v nginx-cert-data:/data                      \
-           -p 80:80 -p 443:443                           \
-           -e CERT_EMAIL=you@institution.example         \
-           -e CERT_DOMAINS=service.institution.example   \
-           -e CERT_UPSTREAM=app:8080                     \
-           -e CERT_PROVIDER=letsencrypt                  \
-           -e CERT_ACME_SERVER="https://acme-v02.harica.gr/acme/<your-uuid>/directory" \
-           -e CERT_EAB_KID="$TCS_EAB_KID"                \
-           -e CERT_EAB_HMAC_KEY="$TCS_EAB_HMAC"          \
-           rac021/nginx-cert:2
+```yaml
+services:
+  nginx-cert:
+    image: rac021/nginx-cert:2
+    restart: unless-stopped
+    ports: ["80:80", "443:443"]
+    environment:
+      CERT_PROVIDER: harica
+      CERT_EMAIL: you@institution.example
+      CERT_DOMAINS: service.institution.example
+      CERT_UPSTREAM: app:8080
+      CERT_EAB_KID: ${HARICA_EAB_KID:?HARICA_EAB_KID is required}
+      CERT_EAB_HMAC_KEY: ${HARICA_EAB_HMAC:?HARICA_EAB_HMAC is required}
+      # HARICA also issues a directory URL specific to your organisation.
+      # If yours differs from the default, set it here:
+      # CERT_ACME_SERVER: https://acme-v02.harica.gr/acme/<your-uuid>/directory
+    volumes:
+      - nginx-cert-data:/data
+
+volumes:
+  nginx-cert-data:
 ```
 
-`CERT_PROVIDER` only acts as a carrier — `CERT_ACME_SERVER` overrides its
-directory URL. Pick `letsencrypt` because it needs no EAB of its own.
+Two things to check on the HARICA side before blaming the configuration:
+
+- the **Domains** tab of your EAB account must list the domain you are
+  requesting — HARICA only issues for domains the organisation has proven
+  control of, and that validation expires;
+- copy the HMAC key with the **copy button**, never by reading it off the
+  screen: `I`, `l` and `1` are indistinguishable in most interfaces, and a
+  single wrong character yields `invalid EAB HMAC signature`.
 
 ### Mixing authorities in one container
 

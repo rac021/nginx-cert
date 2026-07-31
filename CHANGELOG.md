@@ -12,6 +12,11 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   because the whole ACME server block was skipped. The Docker `HEALTHCHECK`
   polls `/healthz`, so a container with certificate management disabled could
   never become healthy.
+- `CERT_ACME_SERVER` dropped the configured EAB credentials. It decided whether
+  to send them from the provider table, so carrying a custom directory on
+  `letsencrypt` — the documented way — meant the server answered
+  `externalAccountRequired`. Explicit credentials now always win, and the
+  authority is named by the host actually contacted.
 - Buypass Go SSL removed from the provider table: it stopped issuing in October
   2025 and shut its ACME service down on 15 April 2026. Leaving it in the
   default chain cost every `auto` run a ~100 s connection timeout before moving
@@ -22,6 +27,11 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Added
 
+- **HARICA** as a first-class provider (`CERT_PROVIDER=harica`). It is the
+  authority behind GÉANT TCS, so certificates are free for members of the
+  European research networks (RENATER, SURF, DFN, Belnet). On a filtered
+  corporate network it has a practical advantage: validation comes from
+  HARICA's servers rather than a well-known public validator.
 - Failure hints distinguish a connection **reset** — a firewall, WAF or IPS on
   the path filtering validation traffic — from a **refused** connection, i.e. a
   closed port. The reset hint includes a one-line command that reproduces the

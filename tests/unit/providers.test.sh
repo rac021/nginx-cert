@@ -166,3 +166,33 @@ test_an_overridden_directory_is_named_by_its_host() {
   CFG_ACME_SERVER=''
   assert_eq "Let's Encrypt" "$(acme::_authority_label letsencrypt)"
 }
+
+test_harica_is_declared() {
+  _reset_providers
+  assert_ok provider::exists harica
+  assert_ok provider::needs_eab harica
+  assert_eq 'https://acme-v02.harica.gr/acme/directory' "$(provider::directory harica)"
+  # No acme.sh alias: the raw URL must be passed.
+  assert_eq 'https://acme-v02.harica.gr/acme/directory' "$(provider::server_arg harica)"
+  assert_contains "$(provider::notes harica)" 'cm.harica.gr'
+}
+
+test_pinning_harica_still_ends_on_the_local_fallback() {
+  _reset_providers
+  CFG_EAB_KID='k'; CFG_EAB_HMAC_KEY='h'
+  assert_eq 'harica selfsigned ' "$(_chain harica fqdn)"
+}
+
+# Adding an authority must not disturb the ones already in use.
+test_letsencrypt_and_zerossl_remain_first_class() {
+  _reset_providers
+  assert_ok    provider::exists letsencrypt
+  assert_ok    provider::exists letsencrypt-staging
+  assert_ok    provider::exists zerossl
+  assert_fails provider::needs_eab letsencrypt
+  assert_ok    provider::needs_eab zerossl
+  assert_ok    provider::supports letsencrypt ip
+  # Default chain unchanged, Let's Encrypt still first.
+  assert_eq 'letsencrypt,zerossl,actalis,google' "$CFG_PROVIDER_CHAIN"
+  assert_contains "$(_chain auto fqdn)" 'letsencrypt'
+}

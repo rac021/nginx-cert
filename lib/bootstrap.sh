@@ -49,14 +49,27 @@ source "${NC_ROOT}/lib/issue.sh"
 # A read-only volume, or one owned by another user, is the most common cause of
 # silent failure: we detect it immediately.
 bootstrap::prepare_dirs() {
+  # A bind-mounted host directory is the usual cause: Docker leaves it owned by
+  # the host user, while this container runs unprivileged. Naming the uid is not
+  # enough -- give the command that fixes it. (A named volume needs none of
+  # this: Docker seeds its ownership from the image.)
+  local uid gid fix
+  uid=$(id -u); gid=$(id -g)
+  fix="  -> Run: sudo chown -R ${uid}:${gid} <the host directory mounted on ${CFG_DATA_DIR}>
+     Or use a named volume instead of a bind mount: -v nginx-cert-data:${CFG_DATA_DIR}"
+
   local d
   for d in "$CFG_DATA_DIR" "$CFG_CERT_DIR" "$CFG_ACME_HOME" "$CFG_STATE_DIR" \
            "$CFG_BACKUP_DIR" "$CFG_WEBROOT"; do
-    mkdir -p "$d" 2>/dev/null || log::die "$EX_CONFIG" \
-      "Cannot create ${d}. Check the permissions of the volume mounted on ${CFG_DATA_DIR} (expected owner: uid $(id -u))."
+    if ! mkdir -p "$d" 2>/dev/null; then
+      log::error "Cannot create ${d}: this container runs as uid ${uid}, which cannot write there."
+      log::die "$EX_CONFIG" "$fix"
+    fi
   done
-  [[ -w $CFG_DATA_DIR ]] || log::die "$EX_CONFIG" \
-    "${CFG_DATA_DIR} is not writable by user $(id -un) (uid $(id -u))."
+  if [[ ! -w $CFG_DATA_DIR ]]; then
+    log::error "${CFG_DATA_DIR} is not writable by $(id -un) (uid ${uid})."
+    log::die "$EX_CONFIG" "$fix"
+  fi
   chmod 700 "$CFG_ACME_HOME" 2>/dev/null || true
   chmod 700 "$CFG_STATE_DIR" 2>/dev/null || true
 

@@ -102,6 +102,39 @@ else
   ko 'the localhost certificate carries the loopback SAN' "$san"
 fi
 
+# -- Scenario 2b: the health endpoint survives CERT_ENABLE=false -------------
+# The HEALTHCHECK polls /healthz. When the ACME server block was only rendered
+# with certificate management enabled, a container with CERT_ENABLE=false could
+# never become healthy.
+docker rm -f "${CONTAINER}-noacme" >/dev/null 2>&1
+docker run -d --name "${CONTAINER}-noacme" -p 18081:80 -e CERT_ENABLE=false "$IMAGE" >/dev/null
+for _ in $(seq 1 30); do
+  docker logs "${CONTAINER}-noacme" 2>&1 | grep -q 'nginx-cert is up' && break
+  sleep 1
+done
+code=$(curl -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:18081/healthz")
+check '/healthz answers even with CERT_ENABLE=false' '200' "$code"
+if docker exec "${CONTAINER}-noacme" certme health >/dev/null 2>&1; then
+  ok 'certme health passes with CERT_ENABLE=false'
+else
+  ko 'certme health passes with CERT_ENABLE=false'
+fi
+docker rm -f "${CONTAINER}-noacme" >/dev/null 2>&1
+
+# -- Scenario 2c: a bind mount the container cannot write to -----------------
+# Naming the expected uid is not enough; the message must give the fix.
+bindpath=$(mktemp -d)
+chmod 700 "$bindpath"
+out=$(docker run --rm --user 65534:65534 -v "${bindpath}:/data" \
+        -e CERT_DOMAINS=example.com -e CERT_EMAIL=a@b.co "$IMAGE" 2>&1); rc=$?
+check 'an unwritable /data exits with code 2' '2' "$rc"
+if [[ $out == *'chown -R'* && $out == *'named volume'* ]]; then
+  ok 'the message gives the chown command and the volume alternative'
+else
+  ko 'the message gives the chown command and the volume alternative' "$out"
+fi
+rm -rf "$bindpath"
+
 # -- Scenario 3: file permissions and privileges -----------------------------
 perms=$(docker exec "$CONTAINER" stat -c '%a' /data/certs/localhost/privkey.pem 2>/dev/null)
 check 'the private key is mode 600' '600' "$perms"

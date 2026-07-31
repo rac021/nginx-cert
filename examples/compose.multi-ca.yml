@@ -30,9 +30,6 @@ services:
         # Pinned to ZeroSSL, wildcard via DNS-01.
         *.apps.example.com             | upstream=apps:8080 provider=zerossl challenge=dns-01 dns=dns_cf
 
-        # Buypass: 180-day certificates, no EAB needed.
-        status.example.com             | upstream=status:8080 provider=buypass
-
         # No public authority possible: signed by the local CA.
         internal.lan                   | upstream=internal:8080
 
@@ -49,7 +46,6 @@ services:
   site:     { image: traefik/whoami, command: --port=8080, expose: ["8080"] }
   customer: { image: traefik/whoami, command: --port=8080, expose: ["8080"] }
   apps:     { image: traefik/whoami, command: --port=8080, expose: ["8080"] }
-  status:   { image: traefik/whoami, command: --port=8080, expose: ["8080"] }
   internal: { image: traefik/whoami, command: --port=8080, expose: ["8080"] }
 
 volumes:

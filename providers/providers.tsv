@@ -12,13 +12,17 @@
 #   7 caps         capabilities: fqdn, wildcard, ip (comma-separated)
 #   8 notes        guidance surfaced to the user when something goes wrong
 #
+# Retired authorities are removed rather than left in place: an entry that can
+# never issue costs every 'auto' run a full connection timeout before the
+# chain moves on.
+#   buypass  -- Buypass Go SSL stopped issuing in October 2025 and shut its
+#               ACME service down on 15 April 2026.
+#
 #id	label	alias	directory	eab	staging_id	caps	notes
 letsencrypt	Let's Encrypt	letsencrypt	https://acme-v02.api.letsencrypt.org/directory	no	letsencrypt-staging	fqdn,wildcard,ip	Free, no sign-up. IP certificates use the "shortlived" profile (160 h).
 letsencrypt-staging	Let's Encrypt (staging)	letsencrypt_test	https://acme-staging-v02.api.letsencrypt.org/directory	no	-	fqdn,wildcard,ip	Staging environment: certificates are not browser-trusted, quotas are very high.
 zerossl	ZeroSSL	zerossl	https://acme.zerossl.com/v2/DV90	required	-	fqdn,wildcard	EAB required. Can be derived automatically from CERT_ZEROSSL_API_KEY.
 actalis	Actalis	actalis	https://acme-api.actalis.com/acme/directory	required	-	fqdn	EAB required, issued from the Actalis customer portal. Free tier: one domain per certificate, 90 days.
-buypass	Buypass Go SSL	-	https://api.buypass.com/acme/directory	no	buypass-staging	fqdn	Free, 180-day certificates. Does not issue wildcards.
-buypass-staging	Buypass (staging)	-	https://api.test4.buypass.no/acme/directory	no	-	fqdn	Buypass staging environment.
 google	Google Trust Services	google	https://dv.acme-v02.api.pki.goog/directory	required	google-staging	fqdn,wildcard	EAB required, generated from the Google Cloud console (Public CA).
 google-staging	Google Trust Services (staging)	googletest	https://dv.acme-v02.test-api.pki.goog/directory	required	-	fqdn,wildcard	Google staging environment.
 sslcom	SSL.com	sslcom	https://acme.ssl.com/sslcom-dv-ecc	required	-	fqdn,wildcard	EAB required, obtained from the SSL.com customer portal.

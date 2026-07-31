@@ -4,13 +4,40 @@ All notable changes to this project are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.0.1] - 2026-07-31
+
+### Fixed
+
+- `/healthz` and the HTTP-to-HTTPS redirect disappeared when `CERT_ENABLE=false`,
+  because the whole ACME server block was skipped. The Docker `HEALTHCHECK`
+  polls `/healthz`, so a container with certificate management disabled could
+  never become healthy.
+- Buypass Go SSL removed from the provider table: it stopped issuing in October
+  2025 and shut its ACME service down on 15 April 2026. Leaving it in the
+  default chain cost every `auto` run a ~100 s connection timeout before moving
+  on. The default `CERT_PROVIDER_CHAIN` is now
+  `letsencrypt,zerossl,actalis,google`.
+- A bind-mounted host directory on `/data` now reports the exact `chown`
+  command to run, instead of only naming the expected uid.
+
+### Added
+
+- Failure hints distinguish a connection **reset** — a firewall, WAF or IPS on
+  the path filtering validation traffic — from a **refused** connection, i.e. a
+  closed port. The reset hint includes a one-line command that reproduces the
+  filtering from outside, because the two look identical in an ACME trace.
+- Unknown and removed `CERT_*` environment variables are reported at startup
+  instead of being silently ignored.
+- A certificate issued by a staging environment is re-issued as soon as
+  `CERT_STAGING` is turned off.
+
 ## [2.0.0] - 2026-07-31
 
 Complete rewrite. See [MIGRATION.md](MIGRATION.md) for the upgrade path.
 
 ### Added
 
-- **Single ACME driver** covering Let's Encrypt, ZeroSSL, Actalis, Buypass,
+- **Single ACME driver** covering Let's Encrypt, ZeroSSL, Actalis,
   Google Trust Services and SSL.com. Authorities are declared in
   `providers/providers.tsv`; adding one is adding a table row.
 - **Actalis support**, including External Account Binding.

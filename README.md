@@ -3,7 +3,7 @@
 nginx with automatic TLS certificates. One container, one variable, HTTPS.
 
 Certificates are issued and renewed automatically from **Let's Encrypt, ZeroSSL,
-Actalis, Buypass, Google Trust Services or SSL.com** — all through one ACME
+Actalis, Google Trust Services or SSL.com** — all through one ACME
 driver. If an authority is unavailable, the next one in the chain is tried, and
 a locally-signed certificate takes over as a last resort so your service is
 never down because of a certificate.
@@ -43,7 +43,6 @@ happens on its own.
   - [Let's Encrypt](#lets-encrypt)
   - [Actalis](#actalis)
   - [ZeroSSL](#zerossl)
-  - [Buypass Go SSL](#buypass-go-ssl)
   - [Google Trust Services](#google-trust-services)
   - [SSL.com](#sslcom)
   - [Private ACME server](#private-acme-server)
@@ -61,7 +60,7 @@ happens on its own.
   - [Staging first, then production](#staging-first-then-production)
   - [Actalis](#actalis-1)
   - [ZeroSSL](#zerossl-1)
-  - [Buypass, Google, SSL.com](#buypass-go-ssl-1)
+  - [Google, SSL.com](#google-trust-services-1)
   - [Private ACME server](#private-acme-server-1)
   - [Several certificates and several authorities](#several-certificates-and-several-authorities-in-one-container)
   - [Wildcard, IP address, local development](#wildcard-certificate-dns-01-1)
@@ -151,7 +150,7 @@ nginx-cert 2.0.0
 Effective configuration
 --------------------------------------------------------------
   Certificate management     enabled
-  Provider                   auto -> letsencrypt,zerossl,actalis,buypass -> selfsigned
+  Provider                   auto -> letsencrypt,zerossl,actalis,google -> selfsigned
   Attempts per authority     2 (initial delay 15s, doubled each retry)
   Self-signed fallback       true
   Staging environment        false
@@ -208,7 +207,6 @@ ID                     AUTHORITY                  EAB       ACCEPTED KINDS    US
 letsencrypt            Let's Encrypt              no        fqdn,wildcard,ip  yes
 zerossl                ZeroSSL                    required  fqdn,wildcard     no -- EAB credentials missing
 actalis                Actalis                    required  fqdn              no -- EAB credentials missing
-buypass                Buypass Go SSL             no        fqdn              yes
 google                 Google Trust Services      required  fqdn,wildcard     no -- EAB credentials missing
 sslcom                 SSL.com                    required  fqdn,wildcard     no -- EAB credentials missing
 selfsigned             Local authority            no        all               yes (last resort)
@@ -373,8 +371,8 @@ server blocks in `/etc/nginx/conf.d/`, or `CERT_MANAGE_NGINX=false` to own
 
 | Variable | Default | Description |
 |---|---|---|
-| `CERT_PROVIDER` | `auto` | `auto`, or one of `letsencrypt`, `zerossl`, `actalis`, `buypass`, `google`, `sslcom`, `selfsigned`. |
-| `CERT_PROVIDER_CHAIN` | `letsencrypt,zerossl,actalis,buypass` | Order tried in `auto` mode. |
+| `CERT_PROVIDER` | `auto` | `auto`, or one of `letsencrypt`, `zerossl`, `actalis`, `google`, `sslcom`, `selfsigned`. |
+| `CERT_PROVIDER_CHAIN` | `letsencrypt,zerossl,actalis,google` | Order tried in `auto` mode. |
 | `CERT_ATTEMPTS` | `2` | Attempts per authority before moving to the next one. |
 | `CERT_RETRY_DELAY` | `15` | Initial delay in seconds between attempts (doubles, capped at 300). |
 | `CERT_FALLBACK_SELFSIGNED` | `true` | Install a local certificate when every authority fails. |
@@ -461,7 +459,6 @@ only in which credentials you need. `certme providers` prints the table with a
 | Let's Encrypt | `letsencrypt` | no | yes (DNS-01) | yes (~160 h) | 90 days | free |
 | ZeroSSL | `zerossl` | required | yes (DNS-01) | REST path only | 90 days | free tier |
 | Actalis | `actalis` | required | no | no | 90 days | free tier |
-| Buypass Go SSL | `buypass` | no | no | no | 180 days | free |
 | Google Trust Services | `google` | required | yes (DNS-01) | no | 90 days | free tier |
 | SSL.com | `sslcom` | required | yes (DNS-01) | no | 90 days | account |
 | Local CA | `selfsigned` | — | yes | yes | 365 days | — |
@@ -584,35 +581,6 @@ required), tunable with `CERT_ZEROSSL_VALIDITY_DAYS` and `CERT_ZEROSSL_TIMEOUT`.
 Let's Encrypt's `shortlived` profile is the free alternative — see
 [IP-address certificates](#ip-address-certificates).
 
-### Buypass Go SSL
-
-Free, no EAB, **180-day** certificates — half as many renewals. No wildcards.
-
-```yaml
-services:
-  nginx-cert:
-    image: rac021/nginx-cert:2
-    restart: unless-stopped
-    ports: ["80:80", "443:443"]
-    environment:
-      CERT_PROVIDER: buypass
-      CERT_EMAIL: you@example.com
-      CERT_DOMAINS: example.com
-      CERT_UPSTREAM: app:8080
-      # 180-day certificates: renewing at D-30 is unnecessarily eager.
-      CERT_RENEW_DAYS: "45"
-    volumes:
-      - nginx-cert-data:/data
-
-  app:
-    image: traefik/whoami
-    command: --port=8080
-    expose: ["8080"]
-
-volumes:
-  nginx-cert-data:
-```
-
 ### Google Trust Services
 
 Requires EAB, generated from the Google Cloud console (Public Certificate
@@ -719,9 +687,6 @@ services:
         # Wildcard: ZeroSSL over DNS-01
         *.apps.example.com           | upstream=apps:8080 provider=zerossl challenge=dns-01 dns=dns_cf
 
-        # 180-day certificates, no EAB
-        status.example.com           | upstream=status:8080 provider=buypass
-
         # Not publicly resolvable: signed by the local CA
         internal.lan                 | upstream=internal:8080
 
@@ -746,7 +711,7 @@ In `auto` mode, `CERT_PROVIDER_CHAIN` is walked in order. Each authority gets
 
 ```yaml
 CERT_PROVIDER: auto
-CERT_PROVIDER_CHAIN: actalis,zerossl,letsencrypt,buypass
+CERT_PROVIDER_CHAIN: actalis,zerossl,letsencrypt
 CERT_ATTEMPTS: "3"                 # tries per authority
 CERT_RETRY_DELAY: "20"             # seconds, doubled each retry
 CERT_ACME_TIMEOUT: 3m              # per-attempt budget
@@ -1071,23 +1036,6 @@ docker run -d --name nginx-cert                       \
 With EAB credentials generated by hand in the dashboard, swap the last line for
 `-e CERT_EAB_KID=... -e CERT_EAB_HMAC_KEY=...`.
 
-### Buypass Go SSL
-
-Free, no EAB, 180-day certificates:
-
-```bash
-docker run -d --name nginx-cert               \
-           --restart unless-stopped           \
-           -p 80:80 -p 443:443                \
-           -v nginx-cert-data:/data           \
-           -e CERT_EMAIL=you@example.com      \
-           -e CERT_DOMAINS=example.com        \
-           -e CERT_UPSTREAM=10.0.0.5:8080     \
-           -e CERT_PROVIDER=buypass           \
-           -e CERT_RENEW_DAYS=45              \
-           rac021/nginx-cert:2
-```
-
 ### Google Trust Services
 
 ```bash
@@ -1161,8 +1109,7 @@ docker run -d --name nginx-cert                          \
            -e CERT_EMAIL=ops@example.com                 \
            -e CERT_DOMAINS='example.com, www.example.com | upstream=site:8080
                             ; customer.example.eu        | upstream=cust:8080 provider=actalis
-                            ; status.example.com         | upstream=stat:8080 provider=buypass
-                            ; internal.lan               | upstream=int:8080' \
+                                             ; internal.lan               | upstream=int:8080' \
            -e CERT_EAB_KID="$ACTALIS_EAB_KID"            \
            -e CERT_EAB_HMAC_KEY="$ACTALIS_EAB_HMAC"      \
            rac021/nginx-cert:2

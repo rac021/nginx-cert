@@ -87,7 +87,7 @@ Two rules keep this honest:
 
 ## The provider abstraction
 
-Let's Encrypt, ZeroSSL, Actalis, Buypass, Google and SSL.com all implement
+Let's Encrypt, ZeroSSL, Actalis, Google and SSL.com all implement
 RFC 8555. They differ in exactly three ways:
 
 | axis | where it lives |

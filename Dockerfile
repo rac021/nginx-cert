@@ -47,7 +47,7 @@ ARG VCS_REF=unknown
 ARG BUILD_DATE=unknown
 
 LABEL org.opencontainers.image.title="nginx-cert" \
-      org.opencontainers.image.description="nginx with automatic TLS certificate issuance and renewal (Let's Encrypt, ZeroSSL, Actalis, Buypass, Google)" \
+      org.opencontainers.image.description="nginx with automatic TLS certificate issuance and renewal (Let's Encrypt, ZeroSSL, Actalis, Google)" \
       org.opencontainers.image.source="https://github.com/rac021/nginx-cert" \
       org.opencontainers.image.licenses="MIT" \
       org.opencontainers.image.version="${VERSION}" \

@@ -81,7 +81,7 @@ config::load() {
 
   # --- Authority selection -----------------------------------------------
   CFG_PROVIDER=$(util::lower "$(config::_default CERT_PROVIDER auto)")
-  CFG_PROVIDER_CHAIN=$(config::_default CERT_PROVIDER_CHAIN 'letsencrypt,zerossl,actalis,buypass')
+  CFG_PROVIDER_CHAIN=$(config::_default CERT_PROVIDER_CHAIN 'letsencrypt,zerossl,actalis,google')
   CFG_ATTEMPTS=$(config::_default CERT_ATTEMPTS 2)
   CFG_RETRY_DELAY=$(config::_default CERT_RETRY_DELAY 15)
   CFG_FALLBACK_SELFSIGNED=$(config::_default CERT_FALLBACK_SELFSIGNED true)

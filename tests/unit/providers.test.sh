@@ -8,7 +8,7 @@
 
 _reset_providers() {
   CFG_EAB_KID=''; CFG_EAB_HMAC_KEY=''; CFG_ZEROSSL_API_KEY=''
-  CFG_PROVIDER_CHAIN='letsencrypt,zerossl,actalis,buypass'
+  CFG_PROVIDER_CHAIN='letsencrypt,zerossl,actalis,google'
   CFG_FALLBACK_SELFSIGNED=true
   CFG_STATE_DIR="${TEST_TMPDIR}/state"
   mkdir -p "$CFG_STATE_DIR"
@@ -21,8 +21,11 @@ test_loads_the_provider_table() {
   assert_ok provider::exists letsencrypt
   assert_ok provider::exists actalis
   assert_ok provider::exists zerossl
-  assert_ok provider::exists buypass
+  assert_ok provider::exists google
   assert_fails provider::exists nonexistent
+  # Buypass Go SSL shut down its ACME service in April 2026; an entry that can
+  # never issue would cost every "auto" run a connection timeout.
+  assert_fails provider::exists buypass
 }
 
 test_exposes_directory_urls() {
@@ -32,10 +35,11 @@ test_exposes_directory_urls() {
 }
 
 test_uses_the_acme_sh_alias_when_one_exists() {
-  # acme.sh knows "actalis" natively, but not Buypass: in that case the full
-  # URL must be passed instead.
+  # acme.sh knows "actalis" natively; providers without an alias fall back to
+  # the raw directory URL.
   assert_eq 'actalis' "$(provider::server_arg actalis)"
-  assert_eq 'https://api.buypass.com/acme/directory' "$(provider::server_arg buypass)"
+  # SSL.com has no acme.sh alias either way; the raw URL must be passed.
+  assert_eq 'sslcom' "$(provider::server_arg sslcom)"
 }
 
 test_declares_which_authorities_require_eab() {
@@ -43,14 +47,12 @@ test_declares_which_authorities_require_eab() {
   assert_ok    provider::needs_eab zerossl
   assert_ok    provider::needs_eab google
   assert_fails provider::needs_eab letsencrypt
-  assert_fails provider::needs_eab buypass
 }
 
 test_declares_accepted_name_kinds() {
   assert_ok    provider::supports letsencrypt wildcard
   assert_ok    provider::supports letsencrypt ip
   assert_fails provider::supports actalis wildcard
-  assert_fails provider::supports buypass wildcard
   assert_fails provider::supports zerossl ip
 }
 
@@ -60,7 +62,6 @@ test_skips_authorities_without_eab_credentials() {
   assert_contains     "$chain" 'letsencrypt'
   assert_not_contains "$chain" 'zerossl'  # no EAB
   assert_not_contains "$chain" 'actalis'  # no EAB
-  assert_contains     "$chain" 'buypass'
 }
 
 test_keeps_eab_authorities_when_credentials_are_supplied() {
@@ -104,7 +105,6 @@ test_skips_authorities_that_cannot_issue_the_requested_kind() {
   assert_contains     "$chain" 'letsencrypt'
   assert_contains     "$chain" 'zerossl'
   assert_not_contains "$chain" 'actalis'   # single-domain, no wildcard
-  assert_not_contains "$chain" 'buypass'   # no wildcard
 }
 
 test_switches_to_the_staging_environment() {

@@ -35,7 +35,13 @@ nginx::render() {
   # into conf.d is left alone.
   rm -f "${NC_NGINX_CONFD}/${NC_GENERATED_PREFIX}"*.conf
 
-  util::is_true "$CFG_ENABLE" && nginx::_render_acme
+  # Rendered unconditionally, including when CERT_ENABLE=false. This block
+  # carries /healthz -- which the Docker HEALTHCHECK polls -- and the
+  # HTTP-to-HTTPS redirect. Skipping it with certificate management disabled
+  # left the container permanently unhealthy. The challenge locations simply
+  # return 404 when nothing uses them, which costs nothing.
+  nginx::_render_acme
+
   util::is_true "$CFG_MANAGE_VHOSTS" && nginx::_render_sites
 
   return 0

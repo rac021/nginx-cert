@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # providers/acme_driver.sh — The single ACME driver (RFC 8555), via acme.sh.
 #
-# Let's Encrypt, ZeroSSL, Actalis, Buypass, Google Trust Services and SSL.com
+# Let's Encrypt, ZeroSSL, Actalis, Google Trust Services and SSL.com
 # all speak the same protocol. The only differences are the directory URL, the
 # presence of External Account Binding, and the accepted name types -- three
 # pieces of data carried by providers.tsv. There is therefore exactly one
@@ -164,6 +164,19 @@ acme::_explain_failure() {
       hint="$(provider::label "$provider")'s ACME directory is unreachable from this container (egress, DNS, or the service is down)." ;;
     *'rateLimited'*|*'too many certificates'*|*'Rate Limit'*)
       hint="Quota reached at $(provider::label "$provider"). Wait for the reset window, or set CERT_STAGING=true while testing." ;;
+    # A reset is very different from a refused connection: something on the
+    # path accepted the TCP connection, let the request through, then cut it.
+    # That is a filtering appliance, not a closed port -- and no amount of
+    # retrying or switching authority-side settings will help.
+    *'Connection reset by peer'*|*'connection reset'*)
+      # Double quotes in the suggested command on purpose: the User-Agent
+      # contains an apostrophe, and a single-quoted shell string would need
+      # '\'' escaping that is unreadable in a log line and easy to mis-paste.
+      hint="$(provider::label "$provider") reached your server, then the connection was cut mid-request. That is a firewall, WAF or IPS on the path -- not a closed port -- filtering the validation traffic. Reproduce it from any outside host:
+    curl -A \"Mozilla/5.0 (compatible; Let's Encrypt validation server; +https://www.letsencrypt.org)\" http://<your-domain>/.well-known/acme-challenge/test
+  If that hangs while a plain curl returns 404, the appliance is matching the authority's User-Agent. Three ways out: have /.well-known/acme-challenge/ exempted from inspection, try another authority (such a rule is usually specific to one), or use CERT_CHALLENGE=dns-01, which needs no inbound connection at all." ;;
+    *'Connection refused'*|*'connection timed out'*|*'Timeout during connect'*)
+      hint="Nothing accepted the connection on port 80. Publish it (-p 80:80), and make sure no upstream firewall drops it. The authority always validates over port 80, even for an HTTPS-only site." ;;
     *'urn:ietf:params:acme:error:unauthorized'*|*'Invalid response from'*|*'404'*)
       hint="HTTP-01 validation failed: port 80 must be reachable from the internet and routed to this container. Check the domain's DNS, that port 80 is published, and any firewall." ;;
     *'externalAccountRequired'*|*'external account binding'*)

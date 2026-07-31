@@ -11,7 +11,7 @@ server {
     listen      [::]:%%HTTP_PORT%%%%DEFAULT_SUFFIX%%;
     server_name _;
 
-    # -- HTTP-01 challenge: Let's Encrypt, ZeroSSL, Actalis, Buypass, Google --
+    # -- HTTP-01 challenge: Let's Encrypt, ZeroSSL, Actalis, Google --
     location ^~ /.well-known/acme-challenge/ {
         root         %%WEBROOT%%;
         default_type "text/plain";

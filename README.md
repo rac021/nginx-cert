@@ -56,6 +56,13 @@ happens on its own.
   - [Local development](#local-development)
   - [Behind a load balancer, with your own nginx configuration](#behind-a-load-balancer-with-your-own-nginx-configuration)
   - [All example files](#all-example-files)
+- [Renewal](#renewal)
+  - [The settings](#the-settings)
+  - [What triggers a renewal](#what-triggers-a-renewal)
+  - [Matching the interval to the certificate lifetime](#matching-the-interval-to-the-certificate-lifetime)
+  - [Renewing on demand](#renewing-on-demand)
+  - [Reacting to a renewal](#reacting-to-a-renewal)
+  - [When renewal fails](#when-renewal-fails)
 - [Without Compose: plain `docker run`](#without-compose-plain-docker-run)
   - [Let's Encrypt](#lets-encrypt-1)
   - [Staging first, then production](#staging-first-then-production)
@@ -399,6 +406,8 @@ server blocks in `/etc/nginx/conf.d/`, or `CERT_MANAGE_NGINX=false` to own
 | `CERT_ZEROSSL_API_KEY` | — | ZeroSSL API key; the EAB is derived from it automatically. |
 
 #### Issuance and renewal
+
+See [Renewal](#renewal) for how these interact and for worked examples.
 
 | Variable | Default | Description |
 |---|---|---|
@@ -961,10 +970,182 @@ server {
 | Wildcard via DNS-01 | [`examples/compose.wildcard-dns.yml`](examples/compose.wildcard-dns.yml) |
 | IP address | [`examples/compose.ip-address.yml`](examples/compose.ip-address.yml) |
 | Private ACME server | [`examples/compose.private-acme.yml`](examples/compose.private-acme.yml) |
+| Tuning renewal | [`examples/compose.renewal.yml`](examples/compose.renewal.yml) |
 | Behind a load balancer | [`examples/compose.behind-lb.yml`](examples/compose.behind-lb.yml) |
 | Local HTTPS development | [`examples/compose.localdev.yml`](examples/compose.localdev.yml) |
 
 ---
+
+## Renewal
+
+Renewal is automatic, and it never restarts anything. A supervised loop inside
+the container re-checks every certificate on a schedule; when one is renewed,
+nginx is sent **SIGHUP**. The master process keeps its PID, old workers finish
+the requests they are serving while new ones start with the new certificate, and
+no connection is dropped.
+
+Observed on a container whose certificate had 364 days left, with the threshold
+raised to 400 to force the decision:
+
+```
+── Certificate 'app.test' -- expires in 364 day(s), threshold is 400 ──
+[ ok ] 'app.test' issued by Let's Encrypt -- expires 2026-10-29 01:18:36Z
+[notice] 566#566: signal 1 (SIGHUP) received, reconfiguring
+[ ok ] nginx configuration reloaded.
+
+── Summary ───────────────────────────────────────────────────────────
+   Renewed                    1  app.test
+   Unchanged                  0
+   Failed                     0
+```
+
+| | before | after |
+|---|---|---|
+| certificate fingerprint | `80:DC:3C:DA…` | `0C:56:CF:9E…` — renewed |
+| **nginx master PID** | **566** | **566** — unchanged |
+| container restarts | 0 | 0 |
+| `/healthz` during the operation | — | HTTP 200 |
+
+### The settings
+
+| Variable | Default | Effect |
+|---|---|---|
+| `CERT_RENEW_DAYS` | `30` | Renew once fewer than this many days remain. |
+| `CERT_RENEW_INTERVAL` | `12h` | How often every certificate is re-checked. Minimum 60s. |
+| `CERT_RENEW_JITTER` | `30m` | Random delay added to each check. |
+| `CERT_FORCE_RENEW` | `false` | Renew regardless of the threshold. For one-off use, not for a long-lived container. |
+| `CERT_FAILURE_COOLDOWN` | `30m` | Wait after a failure before trying again; doubles on each consecutive failure. |
+| `CERT_FAILURE_COOLDOWN_MAX` | `12h` | Ceiling for that backoff. |
+| `CERT_POST_HOOK` | — | Shell command run after a successful renewal. |
+
+`CERT_RENEW_DAYS` is also handed to the ACME client, so its own bookkeeping
+agrees with ours and no authority is contacted for a certificate that is not
+due.
+
+The check interval is not the renewal frequency. A 12-hour interval on a 30-day
+threshold means a certificate is renewed within twelve hours of crossing the
+threshold — about 60 chances before it could expire. Shortening the interval
+does not renew anything sooner than the threshold allows.
+
+Jitter matters as soon as you run more than one instance. Without it, every
+container started by the same deployment wakes at the same second and hits the
+authority together; Let's Encrypt explicitly asks clients to spread out.
+
+### What triggers a renewal
+
+Six conditions, checked in this order. The first that matches is reported in the
+section heading, so the logs always say *why*:
+
+1. **no certificate in place** — first boot, or the volume was recreated;
+2. **`CERT_FORCE_RENEW` is set**;
+3. **fewer than `CERT_RENEW_DAYS` remain**;
+4. **the certificate no longer covers every requested name** — you added a
+   domain to `CERT_DOMAINS`, so it is reissued immediately rather than at expiry;
+5. **a local certificate is in place while a public authority is possible** —
+   the fallback served its purpose and is replaced as soon as an authority
+   answers again;
+6. **it was issued by a staging environment while `CERT_STAGING` is now off** —
+   this is what makes going live a single variable change.
+
+### Matching the interval to the certificate lifetime
+
+**Standard 90-day certificates** — the defaults are already right:
+
+```yaml
+environment:
+  CERT_DOMAINS: example.com
+  CERT_EMAIL: you@example.com
+  # CERT_RENEW_DAYS: "30"      # implicit
+  # CERT_RENEW_INTERVAL: 12h   # implicit
+```
+
+**Short-lived certificates** — Let's Encrypt issues IP-address certificates
+under the `shortlived` profile, valid about 160 hours. A 30-day threshold would
+mean permanent renewal; a 6-hour interval with a 2-day threshold renews at
+roughly one third of the lifetime:
+
+```yaml
+environment:
+  CERT_DOMAINS: 203.0.113.10
+  CERT_RENEW_DAYS: "2"
+  CERT_RENEW_INTERVAL: 6h
+```
+
+**A private CA issuing short certificates** — same reasoning, and no rate limit
+to respect, so the check can be frequent:
+
+```yaml
+environment:
+  CERT_ACME_SERVER: https://ca.corp.example.com/acme/acme/directory
+  CERT_RENEW_DAYS: "10"
+  CERT_RENEW_INTERVAL: 6h
+  CERT_RENEW_JITTER: 5m
+```
+
+**A fleet of instances** — widen the jitter so they never converge:
+
+```yaml
+environment:
+  CERT_RENEW_INTERVAL: 12h
+  CERT_RENEW_JITTER: 4h
+```
+
+Certificate lifetimes are shrinking industry-wide — the maximum falls to 100
+days in 2027 and 47 days in 2029. A threshold expressed in days survives those
+changes; one expressed as "renew on the first of the month" does not.
+
+### Renewing on demand
+
+No restart, and it obeys the same threshold:
+
+```bash
+docker exec nginx-cert certme renew            # renew whatever is due
+docker exec nginx-cert certme renew example.com  # one certificate only
+docker exec nginx-cert certme renew --force    # ignore the threshold; uses quota
+docker exec nginx-cert certme status           # what would be renewed, and when
+```
+
+Reserve `--force` for troubleshooting. On a long-lived container it re-issues on
+every scheduled run and will exhaust an authority's quota.
+
+### Reacting to a renewal
+
+`CERT_POST_HOOK` runs after nginx has been reloaded, with `CERTME_CHANGED` set
+to the certificates that actually changed. Useful when something else consumes
+the same files:
+
+```yaml
+environment:
+  CERT_POST_HOOK: >-
+    echo "renewed: $CERTME_CHANGED" &&
+    docker kill -s HUP other-proxy 2>/dev/null;
+    curl -fsS -X POST https://hooks.example.com/cert-renewed || true
+```
+
+A failing hook is reported but never undoes the renewal.
+
+### When renewal fails
+
+The certificate in place keeps serving. The chain moves to the next authority,
+and if all of them fail a locally-signed certificate is installed so nginx
+stays up — `certme status` then shows `local`.
+
+After a failure nginx-cert waits `CERT_FAILURE_COOLDOWN`, doubling on each
+consecutive failure up to `CERT_FAILURE_COOLDOWN_MAX`, before contacting that
+authority again. This is what stops a container in a restart loop from burning a
+Let's Encrypt quota in minutes — the single most common way to get blocked.
+
+The `HEALTHCHECK` turns the container unhealthy once a certificate has actually
+expired, so a renewal that has been failing for weeks cannot pass unnoticed.
+
+### One thing that does require a restart
+
+Changing `CERT_RENEW_DAYS` — or any other `CERT_*` variable — means recreating
+the container, because Docker fixes the environment at creation. The renewal
+itself never restarts anything; only reconfiguring the renewal does.
+
+If that matters on a live stack, `certme renew` covers the one-off case without
+any restart, and a rolling update of the service covers a permanent change.
 
 ## Without Compose: plain `docker run`
 

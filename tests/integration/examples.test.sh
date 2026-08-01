@@ -128,6 +128,10 @@ expect_certs examples/compose.private-acme.yml \
   'private-acme: carrier provider with an overridden directory' 1 \
   'service.corp.example.com'
 
+expect_certs examples/compose.renewal.yml \
+  'renewal: a 90-day domain and a short-lived IP side by side' 2 \
+  'www.example.com' '203.0.113.10'
+
 expect_certs examples/compose.behind-lb.yml \
   'behind-lb: certificate declared even with vhosts disabled' 1 \
   'example.com'
@@ -145,6 +149,14 @@ if [[ $out == *'203.0.113.10'*'ip'* ]]; then
   ok 'ip-address: the IP kind is detected'
 else
   ko 'ip-address: the IP kind is detected' "$out"
+fi
+
+printf '\n  -- renewal settings reach the configuration --\n'
+out=$(run_with_env_of examples/compose.renewal.yml certme config)
+if [[ $out == *'D-30'* && $out == *'12h'* && $out == *'30m'* ]]; then
+  ok 'renewal: threshold, interval and jitter are all applied'
+else
+  ko 'renewal: threshold, interval and jitter are all applied' "$out"
 fi
 
 printf '\n  -- per-line options reach the configuration --\n'

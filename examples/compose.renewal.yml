@@ -1,0 +1,68 @@
+# Tuning renewal: threshold, check interval, jitter, and a post-renewal hook.
+#
+# Renewal never restarts anything. A loop inside the container re-checks each
+# certificate on the interval below; when one is renewed, nginx receives SIGHUP,
+# keeps its PID, and old workers finish their in-flight requests while new ones
+# start with the new certificate.
+#
+#   docker compose -f examples/compose.renewal.yml up -d
+#   docker compose -f examples/compose.renewal.yml exec nginx-cert certme status
+
+services:
+  nginx-cert:
+    image: rac021/nginx-cert:2
+    restart: unless-stopped
+    ports: ["80:80", "443:443"]
+    environment:
+      CERT_EMAIL: ops@example.com
+      CERT_DOMAINS: |
+        # 90-day certificate: the defaults are already right for it.
+        www.example.com, example.com | upstream=site:8080
+
+        # IP addresses are issued under Let'"'"'s Encrypt'"'"'s "shortlived" profile
+        # (~160 h). Its own threshold is set per line below.
+        203.0.113.10                 | upstream=site:8080
+
+      # -- how long before expiry to renew --------------------------------
+      # 30 days on a 90-day certificate leaves roughly 60 attempts before it
+      # could expire. Certificate lifetimes are shrinking industry-wide, so a
+      # threshold in days survives changes a calendar date would not.
+      CERT_RENEW_DAYS: "30"
+
+      # -- how often to look ----------------------------------------------
+      # Not the renewal frequency: nothing is renewed before the threshold.
+      # This is how quickly the threshold is noticed once crossed.
+      CERT_RENEW_INTERVAL: 12h
+
+      # -- spread a fleet out ----------------------------------------------
+      # Without jitter every container started by the same deployment wakes on
+      # the same second and contacts the authority together.
+      CERT_RENEW_JITTER: 30m
+
+      # -- back off after a failure ----------------------------------------
+      # Doubles on each consecutive failure, up to the ceiling. This is what
+      # stops a container in a restart loop from exhausting a quota.
+      CERT_FAILURE_COOLDOWN: 30m
+      CERT_FAILURE_COOLDOWN_MAX: 12h
+
+      # -- react to a renewal ----------------------------------------------
+      # Runs after nginx has been reloaded. CERTME_CHANGED lists the
+      # certificates that actually changed. A failing hook is reported and
+      # never undoes the renewal.
+      CERT_POST_HOOK: >-
+        echo "renewed: $$CERTME_CHANGED";
+        curl -fsS -X POST https://hooks.example.com/cert-renewed || true
+
+      # Deliberately absent: CERT_FORCE_RENEW. On a long-lived container it
+      # re-issues on every scheduled run and will exhaust the quota. Use
+      # "certme renew --force" for a one-off instead.
+    volumes:
+      - nginx-cert-data:/data
+
+  site:
+    image: traefik/whoami
+    command: --port=8080
+    expose: ["8080"]
+
+volumes:
+  nginx-cert-data:

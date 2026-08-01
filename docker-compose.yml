@@ -10,7 +10,7 @@
 
 services:
   nginx-cert:
-    image: rac021/nginx-cert:2
+    image: rac021/nginx-cert:v2
     container_name: nginx-cert
     restart: unless-stopped
     ports:

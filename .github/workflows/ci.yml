@@ -93,12 +93,17 @@ jobs:
           images: ${{ env.IMAGE_NAME }}
           # Immutable, pinnable tags. "latest" alone made it impossible to roll
           # back or to pin a known-good version.
+          # "latest" is deliberately absent. It has served the 1.x image since
+          # 2025 and existing deployments pull it without a tag; moving it would
+          # hand them a major version with breaking changes. Publishing a new
+          # major means adding its track here, never repointing latest.
           tags: |
+            type=semver,pattern=v{{major}}
+            type=semver,pattern=v{{version}}
             type=semver,pattern={{version}}
             type=semver,pattern={{major}}.{{minor}}
             type=semver,pattern={{major}}
             type=sha,format=long
-            type=raw,value=latest,enable={{is_default_branch}}
 
       - name: Build and push
         id: push

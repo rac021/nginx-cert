@@ -6,6 +6,16 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [2.0.1] - 2026-08-01
 
+### Published as
+
+`rac021/nginx-cert:v2` (latest 2.x) and `rac021/nginx-cert:v2.0.1` (pinned),
+for linux/amd64 and linux/arm64. `:2`, `:2.0` and `:2.0.1` point at the same
+images.
+
+`latest` continues to serve the 1.x image and will not be moved: deployments
+that pull the repository without a tag must not receive a major version with
+breaking changes.
+
 ### Fixed
 
 - `/healthz` and the HTTP-to-HTTPS redirect disappeared when `CERT_ENABLE=false`,

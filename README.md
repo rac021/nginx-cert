@@ -11,7 +11,7 @@ never down because of a certificate.
 ```yaml
 services:
   web:
-    image: rac021/nginx-cert:2
+    image: rac021/nginx-cert:v2
     ports: ["80:80", "443:443"]
     environment:
       CERT_DOMAINS: example.com,www.example.com
@@ -26,6 +26,25 @@ volumes:
 `docker compose up -d`. That is the whole setup: the certificate is requested,
 the hardened HTTPS server is generated, HTTP redirects to HTTPS, and renewal
 happens on its own.
+
+---
+
+## Which tag to use
+
+| Tag | Points to | Use it when |
+|---|---|---|
+| `rac021/nginx-cert:v2` | latest 2.x | you want 2.x and its fixes automatically |
+| `rac021/nginx-cert:v2.0.1` | that exact release | you pin versions |
+| `rac021/nginx-cert:latest` | **still 1.x** | you have existing deployments that must not change |
+
+`latest` deliberately still serves the 1.x image. Deployments that pull
+`rac021/nginx-cert` without a tag keep getting version 1, because version 2 has
+breaking changes -- certificates moved, variables removed, the container runs
+unprivileged. Moving to 2.x is an explicit decision: change the tag to `v2` and
+read [MIGRATION.md](MIGRATION.md).
+
+`:2`, `:2.0` and `:2.0.1` exist as well and point at the same images, for anyone
+who prefers the unprefixed convention.
 
 ---
 
@@ -118,7 +137,7 @@ docker run -d --name web                  \
            -e CERT_DOMAINS=example.com    \
            -e CERT_EMAIL=you@example.com  \
            -e CERT_UPSTREAM=10.0.0.5:8080 \
-           rac021/nginx-cert:2
+           rac021/nginx-cert:v2
 ```
 
 Requirements: the domain's A/AAAA record points at this host, and port 80 is
@@ -333,7 +352,7 @@ docker run -d --name nginx-cert --network web  \
            -e CERT_EMAIL=you@example.com       \
            -e CERT_DOMAINS=example.com         \
            -e CERT_UPSTREAM=app:8080           \
-           rac021/nginx-cert:2
+           rac021/nginx-cert:v2
 ```
 
 Resolution happens per request, so the order does not matter and a restart of
@@ -363,7 +382,7 @@ docker run -d --name nginx-cert                \
            -v ./public:/var/www/html:ro        \
            -e CERT_EMAIL=you@example.com       \
            -e CERT_DOMAINS=example.com         \
-           rac021/nginx-cert:2
+           rac021/nginx-cert:v2
 ```
 
 **3. Certificates only** — set `CERT_MANAGE_VHOSTS=false` and write your own
@@ -492,7 +511,7 @@ The default. Nothing to configure beyond an e-mail address.
 # examples: docker-compose.yml
 services:
   nginx-cert:
-    image: rac021/nginx-cert:2
+    image: rac021/nginx-cert:v2
     restart: unless-stopped
     ports: ["80:80", "443:443"]
     environment:
@@ -522,7 +541,7 @@ to obtain the KID and HMAC key.
 # examples/compose.actalis.yml
 services:
   nginx-cert:
-    image: rac021/nginx-cert:2
+    image: rac021/nginx-cert:v2
     restart: unless-stopped
     ports: ["80:80", "443:443"]
     environment:
@@ -568,7 +587,7 @@ instead of two.
 # examples/compose.zerossl.yml
 services:
   nginx-cert:
-    image: rac021/nginx-cert:2
+    image: rac021/nginx-cert:v2
     restart: unless-stopped
     ports: ["80:80", "443:443"]
     environment:
@@ -614,7 +633,7 @@ gcloud publicca external-account-keys create
 ```yaml
 services:
   nginx-cert:
-    image: rac021/nginx-cert:2
+    image: rac021/nginx-cert:v2
     restart: unless-stopped
     ports: ["80:80", "443:443"]
     environment:
@@ -658,7 +677,7 @@ Any RFC 8555 server — step-ca, Smallstep, EJBCA, HashiCorp Vault.
 # examples/compose.private-acme.yml
 services:
   nginx-cert:
-    image: rac021/nginx-cert:2
+    image: rac021/nginx-cert:v2
     restart: unless-stopped
     ports: ["80:80", "443:443"]
     environment:
@@ -702,7 +721,7 @@ a directory URL.
 ```yaml
 services:
   nginx-cert:
-    image: rac021/nginx-cert:2
+    image: rac021/nginx-cert:v2
     restart: unless-stopped
     ports: ["80:80", "443:443"]
     environment:
@@ -740,7 +759,7 @@ are declared once; each authority reads only what it needs.
 # examples/compose.multi-ca.yml
 services:
   nginx-cert:
-    image: rac021/nginx-cert:2
+    image: rac021/nginx-cert:v2
     restart: unless-stopped
     ports: ["80:80", "443:443"]
     environment:
@@ -819,7 +838,7 @@ environment variables.
 # examples/compose.wildcard-dns.yml
 services:
   nginx-cert:
-    image: rac021/nginx-cert:2
+    image: rac021/nginx-cert:v2
     restart: unless-stopped
     ports: ["80:80", "443:443"]
     environment:
@@ -880,7 +899,7 @@ network round-trip is made.
 # examples/compose.localdev.yml
 services:
   nginx-cert:
-    image: rac021/nginx-cert:2
+    image: rac021/nginx-cert:v2
     ports: ["80:80", "443:443"]
     environment:
       CERT_DOMAINS: |
@@ -914,7 +933,7 @@ the ones generated later.
 # examples/compose.behind-lb.yml
 services:
   nginx-cert:
-    image: rac021/nginx-cert:2
+    image: rac021/nginx-cert:v2
     restart: unless-stopped
     # Unprivileged ports: useful under a balancer, or on a platform that
     # forbids file capabilities.
@@ -1174,7 +1193,7 @@ docker run -d --name nginx-cert               \
            -e CERT_EMAIL=you@example.com      \
            -e CERT_DOMAINS=example.com,www.example.com \
            -e CERT_UPSTREAM=10.0.0.5:8080              \
-           rac021/nginx-cert:2
+           rac021/nginx-cert:v2
 ```
 
 To reach a backend by container name rather than by IP, put both containers on
@@ -1191,7 +1210,7 @@ docker run -d --name nginx-cert               \
            -e CERT_EMAIL=you@example.com      \
            -e CERT_DOMAINS=example.com        \
            -e CERT_UPSTREAM=app:8080          \
-           rac021/nginx-cert:2
+           rac021/nginx-cert:v2
 ```
 
 ### Staging first, then production
@@ -1206,7 +1225,7 @@ docker run -d --name nginx-cert               \
            -e CERT_EMAIL=you@example.com      \
            -e CERT_DOMAINS=example.com        \
            -e CERT_STAGING=true               \
-           rac021/nginx-cert:2
+           rac021/nginx-cert:v2
 
 docker logs -f nginx-cert
 docker exec nginx-cert certme status
@@ -1223,7 +1242,7 @@ docker run -d --name nginx-cert               \
            -v nginx-cert-data:/data           \
            -e CERT_EMAIL=you@example.com      \
            -e CERT_DOMAINS=example.com        \
-           rac021/nginx-cert:2
+           rac021/nginx-cert:v2
 ```
 
 No `--force` is needed: nginx-cert records which authority issued the live
@@ -1243,7 +1262,7 @@ docker run -d --name nginx-cert                     \
            -e CERT_PROVIDER=actalis                 \
            -e CERT_EAB_KID="$ACTALIS_EAB_KID"       \
            -e CERT_EAB_HMAC_KEY="$ACTALIS_EAB_HMAC" \
-           rac021/nginx-cert:2
+           rac021/nginx-cert:v2
 ```
 
 Free tier: one domain per certificate. Declare each host on its own line rather
@@ -1271,7 +1290,7 @@ docker run -d --name nginx-cert                       \
            -e CERT_UPSTREAM=10.0.0.5:8080             \
            -e CERT_PROVIDER=zerossl                   \
            -e CERT_ZEROSSL_API_KEY="$ZEROSSL_API_KEY" \
-           rac021/nginx-cert:2
+           rac021/nginx-cert:v2
 ```
 
 With EAB credentials generated by hand in the dashboard, swap the last line for
@@ -1292,7 +1311,7 @@ docker run -d --name nginx-cert                 \
            -e CERT_PROVIDER=google              \
            -e CERT_EAB_KID="$GTS_EAB_KID"       \
            -e CERT_EAB_HMAC_KEY="$GTS_EAB_HMAC" \
-           rac021/nginx-cert:2
+           rac021/nginx-cert:v2
 ```
 
 ### SSL.com
@@ -1310,7 +1329,7 @@ docker run -d --name nginx-cert                    \
            -e CERT_PROVIDER=sslcom                 \
            -e CERT_EAB_KID="$SSLCOM_EAB_KID"       \
            -e CERT_EAB_HMAC_KEY="$SSLCOM_EAB_HMAC" \
-           rac021/nginx-cert:2
+           rac021/nginx-cert:v2
 ```
 
 ### Private ACME server
@@ -1329,7 +1348,7 @@ docker run -d --name nginx-cert                       \
            -e CERT_RENEW_DAYS=10                      \
            -e CERT_RENEW_INTERVAL=6h                  \
            -e CERT_FALLBACK_SELFSIGNED=false          \
-           rac021/nginx-cert:2
+           rac021/nginx-cert:v2
 ```
 
 `CERT_PROVIDER` only acts as a carrier here; `CERT_ACME_SERVER` overrides its
@@ -1353,7 +1372,7 @@ docker run -d --name nginx-cert                          \
                                              ; internal.lan               | upstream=int:8080' \
            -e CERT_EAB_KID="$ACTALIS_EAB_KID"            \
            -e CERT_EAB_HMAC_KEY="$ACTALIS_EAB_HMAC"      \
-           rac021/nginx-cert:2
+           rac021/nginx-cert:v2
 ```
 
 Credentials are declared once; each authority reads only what it needs.
@@ -1381,7 +1400,7 @@ docker run -d --name nginx-cert                  \
            -e CERT_DNS_SLEEP=30                  \
            -e CF_Token="$CF_TOKEN"               \
            -e CF_Account_ID="$CF_ACCOUNT_ID"     \
-           rac021/nginx-cert:2
+           rac021/nginx-cert:v2
 ```
 
 Quote `*.example.com`, otherwise the shell expands it against the current
@@ -1400,7 +1419,7 @@ docker run -d --name nginx-cert               \
            -e CERT_UPSTREAM=10.0.0.5:8080     \
            -e CERT_RENEW_DAYS=2               \
            -e CERT_RENEW_INTERVAL=6h          \
-           rac021/nginx-cert:2
+           rac021/nginx-cert:v2
 ```
 
 Let's Encrypt issues IP certificates under the `shortlived` profile (~160 h),
@@ -1416,7 +1435,7 @@ docker run -d --name nginx-cert                      \
            -v nginx-cert-data:/data                  \
            -e CERT_DOMAINS='localhost | upstream=app:8080 ; app.test | upstream=app:8080' \
            -e CERT_HSTS=off                          \
-           rac021/nginx-cert:2
+           rac021/nginx-cert:v2
 
 docker cp nginx-cert:/data/ca/rootCA.pem .
 sudo cp rootCA.pem /usr/local/share/ca-certificates/nginx-cert.crt
@@ -1441,7 +1460,7 @@ docker run -d --name nginx-cert                          \
            -e CERT_REAL_IP_FROM=10.0.0.0/8,172.16.0.0/12 \
            -e CERT_HTTP_REDIRECT=false                   \
            -e CERT_MANAGE_VHOSTS=false                   \
-           rac021/nginx-cert:2
+           rac021/nginx-cert:v2
 ```
 
 Certificates stay available to your own servers at

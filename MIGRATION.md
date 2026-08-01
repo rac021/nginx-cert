@@ -4,6 +4,10 @@ Version 2 is a full rewrite. The container behaves the same way from the
 outside — nginx on 80/443, certificates renewed on their own — but the
 configuration surface, the certificate paths and the process model all changed.
 
+`latest` still serves 1.x and will not move, so nothing changes until you say
+so. Migrating means changing the tag to `rac021/nginx-cert:v2` -- or `:v2.0.1`
+to pin the exact release.
+
 Budget ten minutes. There is no in-place upgrade path for the data directory:
 version 2 requests fresh certificates on first start, which is a no-op for your
 users.
@@ -84,7 +88,7 @@ HTTPS server is generated for you:
 ```yaml
 services:
   nginx:
-    image: rac021/nginx-cert:2
+    image: rac021/nginx-cert:v2
     environment:
       CERT_EMAIL: you@example.com
       CERT_DOMAINS: example.com
@@ -160,5 +164,5 @@ The script is kept at the repository root for reference and can be deleted.
 
 ## 7. Rollback
 
-Version 1 images remain available. Pin the digest or the old tag, and restore
+Version 1 images remain available, and `latest` still serves them. Pin the digest or use `rac021/nginx-cert:latest`, and restore
 your `./letsencrypt` directory — version 2 never writes to it.

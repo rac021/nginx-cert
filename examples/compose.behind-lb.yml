@@ -16,7 +16,7 @@
 
 services:
   nginx-cert:
-    image: rac021/nginx-cert:2
+    image: rac021/nginx-cert:v2
     restart: unless-stopped
     # Unprivileged ports: useful under a load balancer, or on a platform that
     # forbids file capabilities (Kubernetes with allowPrivilegeEscalation:false).

@@ -10,7 +10,7 @@
 
 services:
   nginx-cert:
-    image: rac021/nginx-cert:2
+    image: rac021/nginx-cert:v2
     restart: unless-stopped
     ports: ["80:80", "443:443"]
     environment:

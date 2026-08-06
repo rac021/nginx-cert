@@ -101,7 +101,9 @@ util::sanitize_name() {
   n=${n//\*\./wildcard.}
   n=${n//\*/wildcard}
   n=${n//[^A-Za-z0-9._-]/_}
-  n=${n#.}
+  # Every leading dot, not just the first: one pass turned "../../evil" into
+  # "._.._evil", a directory "ls" does not show and no operator expects.
+  while [[ $n == .* ]]; do n=${n#.}; done
   printf '%s' "$n"
 }
 

@@ -222,8 +222,15 @@ config::_parse_one_spec() {
     opt[$key]=$val
   done
 
+  # The name becomes a path component under /data/certs and a file name in
+  # conf.d, so it goes through the same sanitiser whether we derived it or the
+  # user supplied it. Taking name= verbatim let "name=../../evil" write outside
+  # the certificate directory.
   local name=${opt[name]:-}
-  [[ -z $name ]] && name=$(util::sanitize_name "${domains[0]}")
+  [[ -z $name ]] && name=${domains[0]}
+  name=$(util::sanitize_name "$name")
+  [[ -z $name ]] && log::die "$EX_CONFIG" \
+    "CERT_DOMAINS: the name for '${spec}' is empty once sanitised. Use name= with at least one letter or digit."
 
   if [[ -n ${NC_SPEC_DOMAINS[$name]:-} ]]; then
     log::die "$EX_CONFIG" \
@@ -257,6 +264,16 @@ config::validate() {
     "CERT_ATTEMPTS='${CFG_ATTEMPTS}' must be a strictly positive integer."
   [[ $CFG_RENEW_DAYS =~ ^[0-9]+$ ]] || log::die "$EX_CONFIG" \
     "CERT_RENEW_DAYS='${CFG_RENEW_DAYS}' must be an integer."
+
+  # Every duration goes through the same parser, so "5s" and "45m" mean the
+  # same thing everywhere. These two used to be read as bare integers: a unit
+  # suffix on CERT_RETRY_DELAY reached "$((delay * 2))" and killed the retry
+  # loop with a raw bash arithmetic error, so the remaining authorities in the
+  # chain were never tried.
+  CFG_RETRY_DELAY_S=$(util::parse_duration "$CFG_RETRY_DELAY") || log::die "$EX_CONFIG" \
+    "CERT_RETRY_DELAY='${CFG_RETRY_DELAY}' is invalid (examples: 15, 30s, 2m)."
+  CFG_DNS_SLEEP_S=$(util::parse_duration "$CFG_DNS_SLEEP") || log::die "$EX_CONFIG" \
+    "CERT_DNS_SLEEP='${CFG_DNS_SLEEP}' is invalid (examples: 20, 45s, 2m)."
 
   CFG_RENEW_INTERVAL_S=$(util::parse_duration "$CFG_RENEW_INTERVAL") || log::die "$EX_CONFIG" \
     "CERT_RENEW_INTERVAL='${CFG_RENEW_INTERVAL}' is invalid (examples: 12h, 45m, 3600)."
@@ -293,10 +310,36 @@ config::validate() {
   fi
 
   # Per-certificate consistency.
+  #
+  # Every per-line option is checked exactly like its global counterpart. They
+  # used not to be, so "provider=lestencrypt" fell through to the whole auto
+  # chain and "staging=ture" issued against production -- both silently, while
+  # the same typo in CERT_PROVIDER or CERT_STAGING stopped the container with a
+  # precise message.
   local name kind
   for name in ${NC_SPEC_NAMES[@]+"${NC_SPEC_NAMES[@]}"}; do
     kind=${NC_SPEC_KIND[$name]}
     local -a doms=(); read -r -a doms <<<"${NC_SPEC_DOMAINS[$name]}"
+
+    util::assert_bool "CERT_DOMAINS staging= ('${name}')" "${NC_SPEC_STAGING[$name]}"
+    util::assert_bool "CERT_DOMAINS redirect= ('${name}')" "${NC_SPEC_REDIRECT[$name]}"
+
+    if [[ ${NC_SPEC_PROVIDER[$name]} != auto && ${NC_SPEC_PROVIDER[$name]} != selfsigned ]]; then
+      provider::exists "${NC_SPEC_PROVIDER[$name]}" || log::die "$EX_CONFIG" \
+        "CERT_DOMAINS: provider='${NC_SPEC_PROVIDER[$name]}' ('${name}') is unknown. Available: $(provider::list_ids | tr '\n' ' ')selfsigned"
+    fi
+
+    case ${NC_SPEC_CHALLENGE[$name]} in
+      auto|http-01|http|dns-01|dns) ;;
+      *) log::die "$EX_CONFIG" \
+           "CERT_DOMAINS: challenge='${NC_SPEC_CHALLENGE[$name]}' ('${name}'): expected auto, http-01 or dns-01." ;;
+    esac
+
+    case ${NC_SPEC_KEY_TYPE[$name]} in
+      ec-256|ec-384|ec-521|2048|3072|4096) ;;
+      *) log::die "$EX_CONFIG" \
+           "CERT_DOMAINS: key_type='${NC_SPEC_KEY_TYPE[$name]}' ('${name}'): expected ec-256, ec-384, ec-521, 2048, 3072 or 4096." ;;
+    esac
 
     if [[ $kind == invalid ]]; then
       local d bad=()
@@ -347,7 +390,7 @@ config::summary() {
     log::kv_hl "Certificate management" 'disabled' "$C_ORANGE"
   fi
   log::kv_hl "Provider" "$CFG_PROVIDER$( [[ $CFG_PROVIDER == auto ]] && printf ' -> %s -> selfsigned' "$CFG_PROVIDER_CHAIN")"
-  log::kv "Attempts per authority" "$CFG_ATTEMPTS (initial delay ${CFG_RETRY_DELAY}s, doubled each retry)"
+  log::kv "Attempts per authority" "$CFG_ATTEMPTS (initial delay $(util::human_duration "$CFG_RETRY_DELAY_S"), doubled each retry)"
   log::kv "Self-signed fallback"   "$CFG_FALLBACK_SELFSIGNED"
   # Staging is the single setting most likely to be forgotten: it yields
   # certificates no browser trusts, and everything else looks like success.

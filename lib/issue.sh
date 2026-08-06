@@ -6,11 +6,18 @@
 #   for each authority in the chain (CERT_PROVIDER_CHAIN in auto mode)
 #       up to CERT_ATTEMPTS attempts, delay doubled between attempts
 #       if all attempts fail -> move to the next authority
-#   if every authority fails -> self-signed certificate (last link)
+#   if every authority fails -> self-signed certificate, but only when there is
+#                               nothing usable to keep
 #
 # The last link is not an admission of defeat: it guarantees nginx starts and
 # the service stays reachable even when every authority is unavailable. A real
 # authority takes over again at the next scheduled run.
+#
+# It is a rescue and not a substitute, which is why it is dropped from the
+# chain whenever a trusted, unexpired certificate is already installed. A
+# transient outage used to end with that certificate overwritten by a local
+# one -- reported as "Renewed" -- turning thirty seconds of network trouble
+# into a full-page browser warning on a production site.
 # shellcheck shell=bash
 #
 # shellcheck disable=SC2034
@@ -174,6 +181,25 @@ issue::one() {
   local line
   while IFS= read -r line; do [[ -n $line ]] && chain+=("$line"); done < <(issue::_chain "$name")
 
+  # The local authority is a rescue, never a substitute. When a certificate
+  # signed by a real authority is in place and has not expired, dropping the
+  # self-signed link means a failed renewal leaves the service exactly as it
+  # was. Without this, a brief outage at the authority -- a firewall rule, a
+  # DNS blip, an appliance filtering the challenge -- turned a working site
+  # into a full-page browser warning, and the run reported it as a success.
+  if [[ ${NC_SPEC_PROVIDER[$name]} != selfsigned ]] && certs::protects_service "$name"; then
+    local -a public=()
+    local p
+    for p in ${chain[@]+"${chain[@]}"}; do
+      [[ $p == selfsigned ]] && continue
+      public+=("$p")
+    done
+    if ((${#public[@]} != ${#chain[@]})); then
+      log::debug "'${name}': a trusted certificate is in place, the local fallback is not part of this run."
+      chain=(${public[@]+"${public[@]}"})
+    fi
+  fi
+
   if ((${#chain[@]} == 0)); then
     log::error "'${name}': no eligible authority (kind '${NC_SPEC_KIND[$name]}', provider '${NC_SPEC_PROVIDER[$name]}')."
     log::detail error "Enable CERT_FALLBACK_SELFSIGNED=true or pick a compatible provider."
@@ -193,7 +219,7 @@ issue::one() {
     # Local issuance depends on no network: retrying it is pointless.
     [[ $provider == selfsigned ]] && max_attempts=1
 
-    local delay=$CFG_RETRY_DELAY
+    local delay=$CFG_RETRY_DELAY_S
     for ((attempt = 1; attempt <= max_attempts; attempt++)); do
       staging_dir=$(mktemp -d "${CFG_DATA_DIR}/.staging.XXXXXX") || {
         log::error "Could not create a staging directory under ${CFG_DATA_DIR}."
@@ -228,7 +254,7 @@ issue::one() {
       fi
 
       if ((attempt < max_attempts)); then
-        log::detail info "Retrying in ${delay}s…"
+        log::detail info "Retrying in $(util::human_duration "$delay")…"
         sleep "$delay"
         delay=$((delay * 2)); ((delay > 300)) && delay=300
       fi
@@ -240,16 +266,25 @@ issue::one() {
 
   issue::_record_failure "$name"
   log::error "'${name}': no authority in the chain delivered a certificate (${chain[*]})."
+  if certs::protects_service "$name"; then
+    log::detail warn "The certificate in place is kept and still trusted -- it expires in $(certs::days_left "$name") day(s). Nothing was replaced."
+  fi
   NC_FAILED+=("$name")
   return 1
 }
 
-# Process every declared certificate.
+# Process the named certificates, or every declared one when given no argument.
+#
+# The subset is an argument rather than a narrowed NC_SPEC_NAMES: that array is
+# also what the nginx configuration is rendered from, so narrowing it in place
+# made "certme issue one-site" delete every other site's server block.
 # Returns: 0 if anything changed, 2 if nothing did, 1 if anything failed.
 issue::all() {
   NC_CHANGED=(); NC_FAILED=(); NC_SKIPPED=()
+  local -a targets=("$@")
+  ((${#targets[@]})) || targets=(${NC_SPEC_NAMES[@]+"${NC_SPEC_NAMES[@]}"})
   local name
-  for name in ${NC_SPEC_NAMES[@]+"${NC_SPEC_NAMES[@]}"}; do
+  for name in ${targets[@]+"${targets[@]}"}; do
     issue::one "$name" || true
   done
 

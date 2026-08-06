@@ -96,3 +96,18 @@ test_identifies_publicly_certifiable_names() {
   assert_fails domain::is_acme_capable internal
   assert_fails domain::is_acme_capable localhost
 }
+
+# The aggregate vocabulary is what gets stored per certificate and handed to
+# is_acme_capable. It says "ip" where domain::kind says ip4/ip6, and the
+# capability test only knew the latter -- so every IP-address certificate was
+# judged impossible to certify and never left the local authority.
+test_an_ip_certificate_can_be_issued_by_an_authority() {
+  assert_eq 'ip' "$(domain::aggregate_kind '203.0.113.10')"
+  assert_ok domain::is_acme_capable "$(domain::aggregate_kind '203.0.113.10')"
+  assert_ok domain::is_acme_capable "$(domain::aggregate_kind '2001:db8::1')"
+}
+
+test_a_private_address_still_stays_local() {
+  assert_eq 'internal' "$(domain::aggregate_kind '192.168.1.10')"
+  assert_fails domain::is_acme_capable "$(domain::aggregate_kind '192.168.1.10')"
+}

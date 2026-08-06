@@ -105,12 +105,25 @@ EOF
     cp "$NC_CA_CRT" "$chain"
     cat "$leaf" "$chain" >"$full"
   else
-    openssl req -x509 -new -key "$key" -out "$leaf" -days "$days" -sha256 \
-      -subj "/CN=${domains[0]}" -extfile "$ext" 2>/dev/null || {
-      rm -f "$ext"
+    # Same two-step as the CA branch, and for the same reason: "openssl req"
+    # has no -extfile option (it belongs to "openssl x509"), so the one-shot
+    # form silently failed with "Multiple digest or unknown options" and
+    # CERT_SELFSIGNED_CA=false could never produce a certificate at all.
+    # Without extensions the certificate would carry no SAN either, which
+    # every modern client rejects.
+    local csr; csr=$(mktemp)
+    openssl req -new -key "$key" -out "$csr" -subj "/CN=${domains[0]}" 2>/dev/null || {
+      rm -f "$ext" "$csr"
+      log::error "Could not generate the certificate request."
+      return 1
+    }
+    openssl x509 -req -in "$csr" -signkey "$key" -out "$leaf" -days "$days" \
+      -sha256 -extfile "$ext" 2>/dev/null || {
+      rm -f "$ext" "$csr"
       log::error "Could not generate the self-signed certificate."
       return 1
     }
+    rm -f "$csr"
     # nginx needs a readable chain file even when there is no intermediate:
     # we put the certificate itself there.
     cp "$leaf" "$chain"

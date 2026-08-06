@@ -91,12 +91,18 @@ jobs:
         uses: docker/metadata-action@v5
         with:
           images: ${{ env.IMAGE_NAME }}
+          # This is what actually keeps "latest" on the 1.x image, and it is
+          # not optional: metadata-action defaults to "latest=auto", which
+          # appends a latest tag for every non-prerelease semver tag whatever
+          # the list below says. Leaving latest out of "tags" is necessary but
+          # not sufficient -- without this line, pushing v2.0.2 would republish
+          # rac021/nginx-cert:latest as 2.x and hand a breaking major to every
+          # deployment that pulls the image untagged.
+          flavor: |
+            latest=false
           # Immutable, pinnable tags. "latest" alone made it impossible to roll
-          # back or to pin a known-good version.
-          # "latest" is deliberately absent. It has served the 1.x image since
-          # 2025 and existing deployments pull it without a tag; moving it would
-          # hand them a major version with breaking changes. Publishing a new
-          # major means adding its track here, never repointing latest.
+          # back or to pin a known-good version. Publishing a new major means
+          # adding its track here, never repointing latest.
           tags: |
             type=semver,pattern=v{{major}}
             type=semver,pattern=v{{version}}

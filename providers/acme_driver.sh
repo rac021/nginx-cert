@@ -111,7 +111,7 @@ acme::issue() {
   for d in "${domains[@]}"; do cmd+=(-d "$d"); done
 
   if [[ $challenge == dns-01 ]]; then
-    cmd+=(--dns "$dns_provider" --dnssleep "$CFG_DNS_SLEEP")
+    cmd+=(--dns "$dns_provider" --dnssleep "$CFG_DNS_SLEEP_S")
   else
     cmd+=(--webroot "$CFG_WEBROOT")
   fi

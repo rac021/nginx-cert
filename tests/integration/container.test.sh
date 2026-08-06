@@ -245,6 +245,109 @@ else
   ko 'a valid certificate is not reissued on restart' "$(docker logs "$CONTAINER" 2>&1 | tail -5)"
 fi
 
+# -- Scenario 7: an authority outage must not downgrade a working certificate -
+#
+# The one that mattered most: the chain ends in the local authority, which
+# cannot fail, so a thirty-second outage used to replace a valid publicly
+# trusted certificate with a self-signed one -- and report "Renewed".
+cleanup
+docker volume create "$VOLUME" >/dev/null
+
+# Stand in for a real authority: a separate CA, so issuer != subject and the
+# certificate does not look self-signed.
+docker run --rm --network none -v "${VOLUME}:/data" --entrypoint /bin/bash "$IMAGE" -c '
+  set -e
+  d=/data/certs/downgrade.example.com; mkdir -p "$d"
+  openssl req -x509 -newkey rsa:2048 -nodes -keyout /tmp/ca.key -out /tmp/ca.pem \
+    -days 60 -subj "/O=Test Public CA/CN=Test Public CA R1" 2>/dev/null
+  openssl req -new -newkey rsa:2048 -nodes -keyout "$d/privkey.pem" -out /tmp/csr \
+    -subj "/CN=downgrade.example.com" 2>/dev/null
+  printf "subjectAltName=DNS:downgrade.example.com\n" > /tmp/ext
+  openssl x509 -req -in /tmp/csr -CA /tmp/ca.pem -CAkey /tmp/ca.key -CAcreateserial \
+    -out "$d/cert.pem" -days 40 -sha256 -extfile /tmp/ext 2>/dev/null
+  cp /tmp/ca.pem "$d/chain.pem"; cat "$d/cert.pem" "$d/chain.pem" > "$d/fullchain.pem"
+  chmod 600 "$d/privkey.pem"' >/dev/null
+
+issuer_before=$(docker run --rm -v "${VOLUME}:/data" --entrypoint openssl "$IMAGE" \
+  x509 -in /data/certs/downgrade.example.com/fullchain.pem -noout -issuer 2>/dev/null)
+
+# CERT_RENEW_DAYS above the remaining lifetime makes the renewal due; --network
+# none makes every authority fail.
+out=$(docker run --rm --network none -v "${VOLUME}:/data" \
+  -e CERT_EMAIL='a@b.co' -e CERT_DOMAINS='downgrade.example.com' \
+  -e CERT_RENEW_DAYS=60 -e CERT_ATTEMPTS=1 -e CERT_ACME_TIMEOUT=8s \
+  --entrypoint /opt/nginx-cert/bin/certme "$IMAGE" issue 2>&1); rc=$?
+
+issuer_after=$(docker run --rm -v "${VOLUME}:/data" --entrypoint openssl "$IMAGE" \
+  x509 -in /data/certs/downgrade.example.com/fullchain.pem -noout -issuer 2>/dev/null)
+
+check 'a failed renewal leaves the trusted certificate in place' "$issuer_before" "$issuer_after"
+check 'a failed renewal is reported as a failure, not a renewal' '3' "$rc"
+if [[ $out == *'is kept and still trusted'* ]]; then
+  ok 'the run says the certificate was kept'
+else
+  ko 'the run says the certificate was kept' "$out"
+fi
+
+# The same outage with no certificate at all must still fall back locally:
+# that is what the local authority is for.
+docker volume rm -f "$VOLUME" >/dev/null 2>&1 || true
+docker volume create "$VOLUME" >/dev/null
+docker run --rm --network none -v "${VOLUME}:/data" \
+  -e CERT_EMAIL='a@b.co' -e CERT_DOMAINS='fresh.example.com' \
+  -e CERT_ATTEMPTS=1 -e CERT_ACME_TIMEOUT=8s \
+  --entrypoint /opt/nginx-cert/bin/certme "$IMAGE" issue >/dev/null 2>&1
+if docker run --rm -v "${VOLUME}:/data" --entrypoint test "$IMAGE" \
+     -s /data/certs/fresh.example.com/fullchain.pem; then
+  ok 'with no certificate at all, the local authority still rescues the boot'
+else
+  ko 'with no certificate at all, the local authority still rescues the boot'
+fi
+
+# -- Scenario 8: issuing one certificate must not disturb the others ---------
+cleanup
+docker volume create "$VOLUME" >/dev/null
+out=$(docker run --rm --network none -v "${VOLUME}:/data" \
+  -e CERT_EMAIL='a@b.co' -e CERT_DOMAINS=$'one.test | upstream=x:80\ntwo.test | upstream=y:80' \
+  --entrypoint /bin/bash "$IMAGE" -c '
+    B=/opt/nginx-cert/bin/certme
+    $B issue >/dev/null 2>&1; $B render >/dev/null 2>&1
+    $B issue one.test --force >/dev/null 2>&1
+    ls /etc/nginx/conf.d/ | grep -c "^nginx-cert\..*two.test"' 2>&1)
+check 'issuing one certificate keeps the other sites served' '1' "$(printf '%s' "$out" | tail -1)"
+
+# -- Scenario 9: CERT_SELFSIGNED_CA=false actually produces a certificate ----
+if docker run --rm --network none -e CERT_EMAIL='a@b.co' -e CERT_DOMAINS='nossca.test' \
+     -e CERT_SELFSIGNED_CA=false --entrypoint /bin/bash "$IMAGE" \
+     -c '/opt/nginx-cert/bin/certme issue >/dev/null 2>&1
+         openssl x509 -in /data/certs/nossca.test/fullchain.pem -noout -ext subjectAltName' \
+     2>/dev/null | grep -q 'DNS:nossca.test'; then
+  ok 'CERT_SELFSIGNED_CA=false issues a certificate carrying its SAN'
+else
+  ko 'CERT_SELFSIGNED_CA=false issues a certificate carrying its SAN'
+fi
+
+# -- Scenario 10: the base image's default server must not shadow ours -------
+#
+# nginx prefers an exact server_name match over default_server, so the stock
+# "server_name localhost" block captured every Host: localhost request on port
+# 80 -- the welcome page instead of the redirect, 404 on /healthz and on the
+# ACME challenge.
+cleanup
+docker run -d --name "$CONTAINER" --network none \
+  -e CERT_EMAIL='a@b.co' -e CERT_DOMAINS='localhost | upstream=app:8080' \
+  "$IMAGE" >/dev/null
+for _ in $(seq 1 40); do
+  docker logs "$CONTAINER" 2>&1 | grep -q 'nginx-cert is up' && break
+  sleep 1
+done
+code=$(docker exec "$CONTAINER" curl -s -o /dev/null -w '%{http_code}' \
+  -H 'Host: localhost' http://127.0.0.1/healthz 2>/dev/null)
+check 'Host: localhost reaches /healthz, not the stock welcome page' '200' "$code"
+code=$(docker exec "$CONTAINER" curl -s -o /dev/null -w '%{http_code}' \
+  -H 'Host: localhost' http://127.0.0.1/ 2>/dev/null)
+check 'Host: localhost is redirected to HTTPS' '308' "$code"
+
 # -- Result ------------------------------------------------------------------
 printf '\n  %d passed, %d failed\n' "$PASSED" "$FAILED"
 ((FAILED == 0))

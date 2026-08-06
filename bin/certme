@@ -79,6 +79,12 @@ cmd::apply_changes() {
 
 # --- Commands --------------------------------------------------------------
 
+# Everything that must not run concurrently with another certme process.
+cmd::_issue_locked() {
+  bootstrap::cleanup_staging
+  issue::all "$@"
+}
+
 cmd::issue() {
   local -a only=("$@")
 
@@ -89,21 +95,27 @@ cmd::issue() {
   ((${#NC_SPEC_NAMES[@]} == 0)) && { log::warn "No certificate declared (CERT_DOMAINS is empty)."; return 0; }
 
   # Optionally restrict the run to a subset of certificates.
+  #
+  # The subset is passed to issue::all; NC_SPEC_NAMES is left alone. It is also
+  # the list the nginx configuration is rendered from, and narrowing it here
+  # made "certme issue one-site" delete every other site's server block and
+  # reload -- taking sites offline that the command never mentioned.
+  local -a targets=()
   if ((${#only[@]})); then
-    local n keep=() found d
+    local n found d
     for n in "${only[@]}"; do
       found=0
-      for d in "${NC_SPEC_NAMES[@]}"; do [[ $d == "$n" ]] && { keep+=("$n"); found=1; }; done
+      for d in "${NC_SPEC_NAMES[@]}"; do [[ $d == "$n" ]] && { targets+=("$n"); found=1; }; done
       ((found)) || log::die "$EX_CONFIG" "Unknown certificate: '${n}'. See 'certme list'."
     done
-    NC_SPEC_NAMES=("${keep[@]}")
   fi
 
   bootstrap::prepare_dirs
-  bootstrap::cleanup_staging
 
+  # Staging directories belong to whoever holds the lock: cleaning them up
+  # before taking it deleted the directory a concurrent run was writing into.
   local rc=0
-  lock::with "$CFG_LOCK_FILE" 0 issue::all || rc=$?
+  lock::with "$CFG_LOCK_FILE" 0 cmd::_issue_locked ${targets[@]+"${targets[@]}"} || rc=$?
   ((rc == EX_BUSY)) && return "$EX_BUSY"
 
   local apply_rc=0

@@ -4,9 +4,10 @@ nginx with automatic TLS certificates. One container, one variable, HTTPS.
 
 Certificates are issued and renewed automatically from **Let's Encrypt, ZeroSSL,
 Actalis, Google Trust Services, HARICA, Certum, Sectigo or SSL.com** — all through one ACME
-driver. If an authority is unavailable, the next one in the chain is tried, and
-a locally-signed certificate takes over as a last resort so your service is
-never down because of a certificate.
+driver. If an authority is unavailable, the next one in the chain is tried; a
+certificate already in place is never replaced by a lesser one, and a
+locally-signed certificate takes over only when there is nothing to keep — so
+your service is never down because of a certificate.
 
 ```yaml
 services:
@@ -1145,9 +1146,16 @@ A failing hook is reported but never undoes the renewal.
 
 ### When renewal fails
 
-The certificate in place keeps serving. The chain moves to the next authority,
-and if all of them fail a locally-signed certificate is installed so nginx
-stays up — `certme status` then shows `local`.
+The certificate in place keeps serving, and nothing replaces it. The chain
+moves to the next authority; if all of them fail, the run is reported as a
+failure and your existing certificate is left exactly as it was.
+
+The locally-signed certificate is a rescue, not a substitute: it is installed
+only when there is nothing usable to keep — a first boot, or a certificate that
+has already expired. A publicly trusted certificate is never overwritten by a
+local one, so an authority being unreachable for an hour cannot turn a working
+site into a browser warning. `certme status` shows `local` only in the cases
+where that rescue actually happened.
 
 After a failure nginx-cert waits `CERT_FAILURE_COOLDOWN`, doubling on each
 consecutive failure up to `CERT_FAILURE_COOLDOWN_MAX`, before contacting that

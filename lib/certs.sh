@@ -24,14 +24,31 @@ certs::not_after() {
   openssl x509 -in "$f" -noout -enddate -dateopt iso_8601 2>/dev/null | cut -d= -f2-
 }
 
-# Days remaining (may be negative).
-certs::days_left() {
+# Seconds remaining (may be negative). The whole-day view rounds; this one is
+# what any "is it still usable right now" decision must be based on.
+certs::seconds_left() {
   local end epoch now
-  end=$(certs::not_after "$1") || { printf '0'; return 1; }
-  [[ -n $end ]] || { printf '0'; return 1; }
-  epoch=$(date -u -d "${end%Z}" +%s 2>/dev/null) || { printf '0'; return 1; }
+  end=$(certs::not_after "$1") || return 1
+  [[ -n $end ]] || return 1
+  epoch=$(date -u -d "${end%Z}" +%s 2>/dev/null) || return 1
   now=$(date -u +%s)
-  printf '%s' "$(( (epoch - now) / 86400 ))"
+  printf '%s' "$((epoch - now))"
+}
+
+# Days remaining (may be negative).
+#
+# Rounded towards minus infinity, not towards zero: a certificate that expired
+# two hours ago has to report -1. Truncating gives 0, which reads as "expires
+# today" everywhere -- and kept the health probe green on an expired
+# certificate, since it only flags a negative count.
+certs::days_left() {
+  local secs
+  secs=$(certs::seconds_left "$1") || { printf '0'; return 1; }
+  if ((secs >= 0)); then
+    printf '%s' "$((secs / 86400))"
+  else
+    printf '%s' "$(( -(( -secs + 86399) / 86400) ))"
+  fi
 }
 
 certs::issuer() {
@@ -63,6 +80,21 @@ certs::is_selfsigned() {
   [[ $issuer == *'nginx-cert'* ]] && return 0
   local subject; subject=$(openssl x509 -in "$f" -noout -subject 2>/dev/null)
   [[ ${issuer#issuer=} == "${subject#subject=}" ]]
+}
+
+# Is a certificate signed by a real authority, and still valid, in place?
+#
+# This is the guard that keeps the local authority in its role of last resort.
+# The self-signed link exists so that a first boot with no certificate still
+# brings nginx up -- not so that a thirty-second outage at the authority can
+# replace a working, publicly-trusted certificate with one every browser
+# rejects. When this returns 0, a failed renewal must change nothing.
+certs::protects_service() {
+  local name=$1 secs
+  certs::exists "$name"      || return 1
+  certs::is_selfsigned "$name" && return 1
+  secs=$(certs::seconds_left "$name") || return 1
+  ((secs > 0))
 }
 
 # --- Which authority actually issued the live certificate ------------------

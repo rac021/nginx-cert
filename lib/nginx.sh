@@ -55,9 +55,16 @@ nginx::render() {
   # HTTP-to-HTTPS redirect. Skipping it with certificate management disabled
   # left the container permanently unhealthy. The challenge locations simply
   # return 404 when nothing uses them, which costs nothing.
-  nginx::_render_acme
+  #
+  # Its failure is fatal like every other render here. It used not to be, so a
+  # conf.d that could not be written (a ":ro" bind mount, a wrong owner) took
+  # /healthz, the redirect and the ACME challenge away while nginx::render
+  # still returned 0 and the container reported a successful start.
+  nginx::_render_acme || return 1
 
-  util::is_true "$CFG_MANAGE_VHOSTS" && nginx::_render_sites
+  if util::is_true "$CFG_MANAGE_VHOSTS"; then
+    nginx::_render_sites || return 1
+  fi
 
   return 0
 }

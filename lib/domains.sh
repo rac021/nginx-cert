@@ -131,9 +131,16 @@ domain::kind() {
 }
 
 # Can a public certificate authority validate this kind of name?
+#
+# Both vocabularies are accepted on purpose. domain::kind distinguishes ip4
+# from ip6; domain::aggregate_kind collapses them to "ip", and it is the
+# aggregate that is stored per certificate and passed here. Listing only
+# ip4/ip6 meant every IP-address certificate was judged impossible to certify,
+# so it never left the local authority -- with a whole documented feature, and
+# an example, built on top of it.
 domain::is_acme_capable() {
   case "${1:-}" in
-    fqdn|wildcard|ip4|ip6) return 0 ;;
+    fqdn|wildcard|ip|ip4|ip6) return 0 ;;
     *) return 1 ;;
   esac
 }

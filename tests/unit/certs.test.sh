@@ -189,3 +189,66 @@ test_detects_a_selfsigned_certificate() {
   _gen_bundle "$d" 'example.com'
   assert_ok certs::is_selfsigned 'detectss'
 }
+
+# --- The local authority must never replace a working certificate -----------
+#
+# A transient outage at the certificate authority used to end with a
+# self-signed certificate installed over a perfectly valid public one, and the
+# run reported "Renewed". These four cases pin the rule that prevents it.
+
+test_a_valid_public_certificate_protects_the_service() {
+  local d; d=$(_mkdir_bundle guard_ok)
+  _gen_ca_signed_bundle "$d" 'example.com' 90
+  assert_ok certs::protects_service 'guard_ok'
+}
+
+test_a_selfsigned_certificate_does_not_protect_the_service() {
+  local d; d=$(_mkdir_bundle guard_ss)
+  _gen_bundle "$d" 'example.com'
+  assert_fails certs::protects_service 'guard_ss' \
+    'a local certificate may be replaced: it protects nothing'
+}
+
+test_an_expired_public_certificate_does_not_protect_the_service() {
+  local d; d=$(_mkdir_bundle guard_exp)
+  openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:P-256 -nodes \
+    -not_before 20200101000000Z -not_after 20200102000000Z \
+    -subj '/CN=example.com' -addext 'subjectAltName=DNS:example.com' \
+    -keyout "${d}/privkey.pem" -out "${d}/cert.pem" 2>/dev/null
+  cp "${d}/cert.pem" "${d}/chain.pem"; cp "${d}/cert.pem" "${d}/fullchain.pem"
+  assert_fails certs::protects_service 'guard_exp'
+}
+
+test_a_missing_certificate_does_not_protect_the_service() {
+  assert_fails certs::protects_service 'guard_absent'
+}
+
+# --- Expiry arithmetic ------------------------------------------------------
+
+test_reports_a_negative_day_count_for_a_certificate_expired_hours_ago() {
+  local d; d=$(_mkdir_bundle recently_expired)
+  # notAfter two hours in the past: truncation towards zero used to report 0,
+  # which reads as "expires today" and kept the health probe green.
+  local stamp; stamp=$(date -u -d '2 hours ago' +%Y%m%d%H%M%SZ 2>/dev/null) || return 0
+  openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:P-256 -nodes \
+    -not_before 20200101000000Z -not_after "$stamp" \
+    -subj '/CN=example.com' -addext 'subjectAltName=DNS:example.com' \
+    -keyout "${d}/privkey.pem" -out "${d}/cert.pem" 2>/dev/null
+  cp "${d}/cert.pem" "${d}/chain.pem"; cp "${d}/cert.pem" "${d}/fullchain.pem"
+  assert_eq '-1' "$(certs::days_left 'recently_expired')"
+}
+
+test_counts_whole_days_for_a_valid_certificate() {
+  local d; d=$(_mkdir_bundle tendays)
+  _gen_bundle "$d" 'example.com' 'DNS:example.com' 10
+  # openssl dates the certificate from the current second, so the answer sits
+  # exactly on a whole-day boundary and is 10 or 9 depending on which side of
+  # it the clock falls. Both are correct; asserting one of them is a flake.
+  local left; left=$(certs::days_left 'tendays')
+  case $left in
+    9|10) ;;
+    *) fail "ten days of validity must leave 9 or 10 whole days
+expected : '9' or '10'
+actual   : '${left}'" ;;
+  esac
+}

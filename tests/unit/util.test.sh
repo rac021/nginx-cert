@@ -38,8 +38,10 @@ test_sanitises_lineage_names() {
   assert_eq 'wildcard.example.com' "$(util::sanitize_name '*.example.com')"
   assert_eq 'example.com'          "$(util::sanitize_name 'example.com')"
   assert_eq '192.168.1.1'          "$(util::sanitize_name '192.168.1.1')"
-  # No sequence may escape the certificate directory.
+  # No sequence may escape the certificate directory, and no name may end up
+  # hidden: a lineage the operator cannot see with "ls" is a support call.
   assert_not_contains "$(util::sanitize_name '../../etc/passwd')" '/'
+  assert_eq '_.._etc_passwd' "$(util::sanitize_name '../../etc/passwd')"
 }
 
 test_splits_and_joins() {

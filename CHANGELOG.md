@@ -4,6 +4,62 @@ All notable changes to this project are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+Findings of a full audit of the 2.0.1 tree. Every item below was reproduced
+against the built image before being fixed, and each one now has a test.
+
+### Fixed
+
+- **A failed renewal no longer replaces a working certificate.** The authority
+  chain ends in the local self-signed authority, which cannot fail, so any
+  transient outage — a firewall rule, a DNS blip, an appliance filtering the
+  challenge — overwrote a valid, publicly trusted certificate with a local one
+  and reported the run as `Renewed`. A production site went to a full-page
+  browser warning because a certificate authority was unreachable for a minute.
+  The local authority is now dropped from the chain whenever a trusted,
+  unexpired certificate is in place: the run fails, says the certificate was
+  kept, and retries later. First boots and expired certificates are still
+  rescued exactly as before.
+- **`certme issue <name>` no longer takes the other sites offline.** It
+  narrowed the certificate list in place, and that same list is what the nginx
+  configuration is rendered from — so renewing one certificate deleted every
+  other site's server block and reloaded. Requests for those hosts were then
+  answered by the surviving vhost, with the wrong certificate.
+- **IP-address certificates reach a certificate authority.** The capability
+  test knew `ip4`/`ip6` but was always called with the aggregate kind, `ip`, so
+  every IP certificate was judged impossible to certify and never left the
+  local authority — with a documented feature and an example built on top of it.
+- **`CERT_SELFSIGNED_CA=false` produces a certificate.** It passed `-extfile`
+  to `openssl req`, which has no such option, so the last resort of the chain
+  could never issue anything.
+- **The next tag cannot republish `latest`.** Omitting `latest` from the tag
+  list is not enough: `docker/metadata-action` defaults to `latest=auto` and
+  appends it for every non-prerelease semver tag. `flavor: latest=false` is
+  what actually holds `latest` on the 1.x image.
+- A certificate that expired less than a day ago reported `0` days left instead
+  of `-1`, so the health probe stayed green while the site served an expired
+  certificate.
+- The base image's `default.conf` was never removed. nginx prefers an exact
+  `server_name` match over `default_server`, so it captured every
+  `Host: localhost` request on port 80: the stock welcome page instead of the
+  redirect, and 404 on `/healthz` and on the ACME challenge.
+- A conf.d that cannot be written no longer passes silently: the ACME server
+  block carries `/healthz`, the redirect and the challenge, and its render
+  failure was the only one in `nginx::render` that was ignored.
+- Per-line options in `CERT_DOMAINS` are validated like their global
+  counterparts. `provider=lestencrypt` fell through to the whole auto chain and
+  `staging=ture` issued against production, both without a word, while the same
+  typo in `CERT_PROVIDER` or `CERT_STAGING` stopped the container.
+- `name=` goes through the same sanitiser as a derived name. Taken verbatim, it
+  reached file paths: `name=../../evil` wrote outside the certificate directory.
+- `CERT_RETRY_DELAY` and `CERT_DNS_SLEEP` accept a duration like every other
+  time setting, and are validated. A unit suffix used to reach the arithmetic
+  that doubles the delay and abort the run with a raw bash error, so the
+  remaining authorities in the chain were never tried.
+- Staging directories are cleaned up under the lock, not before taking it,
+  where a second run could delete the directory the first was writing into.
+
 ## [2.0.1] - 2026-08-01
 
 ### Published as

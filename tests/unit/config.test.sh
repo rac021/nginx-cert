@@ -19,6 +19,22 @@ _reset_specs() {
 
 _parse() { _reset_specs; CERT_DOMAINS=$1 config::_parse_domains; }
 
+# The whole loader: parse *and* validate. Takes VAR=value arguments.
+#
+# The success form runs in this shell so the resulting CFG_*/NC_SPEC_* values
+# can be asserted on; the failure form runs in a subshell because rejecting a
+# value means calling log::die, which exits.
+_load_config() {
+  _reset_specs
+  local kv
+  for kv in "$@"; do export "${kv?}"; done
+  config::load
+}
+
+_load_config_fails() {
+  ( _load_config "$@" >/dev/null 2>&1 )
+}
+
 test_parses_a_single_certificate() {
   _parse 'example.com'
   assert_eq '1'           "${#NC_SPEC_NAMES[@]}"
@@ -161,4 +177,60 @@ test_rejects_two_certificates_with_the_same_name() {
   out=$( _parse $'example.com\nexample.com' 2>&1 ) || rc=$?
   assert_ne '0' "$rc"
   assert_contains "$out" 'same name'
+}
+
+# --- Per-line options are validated exactly like their global counterparts ---
+#
+# They used not to be: "provider=lestencrypt" fell through to the whole auto
+# chain and "staging=ture" issued against production, both without a word,
+# while the same typo in CERT_PROVIDER or CERT_STAGING stopped the container.
+
+test_rejects_an_unknown_per_certificate_provider() {
+  assert_fails _load_config_fails CERT_EMAIL=a@b.com \
+    "CERT_DOMAINS=example.com | provider=lestencrypt"
+}
+
+test_rejects_a_non_boolean_per_certificate_staging() {
+  assert_fails _load_config_fails CERT_EMAIL=a@b.com \
+    "CERT_DOMAINS=example.com | staging=ture"
+}
+
+test_rejects_an_unknown_per_certificate_key_type() {
+  assert_fails _load_config_fails CERT_EMAIL=a@b.com \
+    "CERT_DOMAINS=example.com | key_type=rubbish"
+}
+
+test_rejects_an_unknown_per_certificate_challenge() {
+  assert_fails _load_config_fails CERT_EMAIL=a@b.com \
+    "CERT_DOMAINS=example.com | challenge=rubbish"
+}
+
+test_accepts_a_valid_per_certificate_provider() {
+  assert_ok _load_config_fails CERT_EMAIL=a@b.com \
+    "CERT_DOMAINS=example.com | provider=letsencrypt staging=true key_type=ec-384"
+}
+
+# The name becomes a path component under /data/certs and a file name in
+# conf.d. Taken verbatim, "name=../../evil" wrote outside the data directory.
+test_sanitises_a_user_supplied_certificate_name() {
+  _load_config CERT_EMAIL=a@b.com "CERT_DOMAINS=example.com | name=../../evil"
+  assert_not_contains "${NC_SPEC_NAMES[0]}" '/'
+  assert_eq '_.._evil' "${NC_SPEC_NAMES[0]}" 'every path separator is neutralised'
+}
+
+# Every duration is read by the same parser, so a unit suffix is either
+# understood or refused -- never handed to arithmetic that aborts the run.
+test_accepts_a_duration_for_the_retry_delay() {
+  _load_config CERT_EMAIL=a@b.com CERT_DOMAINS=example.com CERT_RETRY_DELAY=2m
+  assert_eq '120' "$CFG_RETRY_DELAY_S"
+}
+
+test_rejects_an_invalid_retry_delay() {
+  assert_fails _load_config_fails CERT_EMAIL=a@b.com CERT_DOMAINS=example.com \
+    CERT_RETRY_DELAY=soon
+}
+
+test_rejects_an_invalid_dns_sleep() {
+  assert_fails _load_config_fails CERT_EMAIL=a@b.com CERT_DOMAINS=example.com \
+    CERT_DNS_SLEEP=later
 }

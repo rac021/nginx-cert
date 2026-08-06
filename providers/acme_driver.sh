@@ -129,12 +129,17 @@ acme::issue() {
 
   # Documented escape hatch: acme.sh options nginx-cert does not expose.
   if [[ -n ${CFG_ACME_ARGS:-} ]]; then
-    local -a extra=(); read -r -a extra <<<"$CFG_ACME_ARGS"
+    local -a extra=()
+    if ! util::split_args extra "$CFG_ACME_ARGS"; then
+      log::error "CERT_ACME_ARGS cannot be parsed: ${CFG_ACME_ARGS}"
+      log::detail error "Quotes must balance, as on a command line -- for example: --pre-hook \"systemctl stop app\""
+      return 1
+    fi
     cmd+=(${extra[@]+"${extra[@]}"})
   fi
 
   log::info "-> $(acme::_authority_label "$provider"): requesting a certificate for ${domains[*]} (${challenge} challenge${profile:+, ${profile} profile})."
-  log::debug "Command: $(log::redact "${cmd[*]}")"
+  log::debug "Command: $(log::redact "$(util::quote_args "${cmd[@]}")")"
 
   # --- Execution ----------------------------------------------------------
   #

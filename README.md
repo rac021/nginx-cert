@@ -422,7 +422,7 @@ server blocks in `/etc/nginx/conf.d/`, or `CERT_MANAGE_NGINX=false` to own
 | `CERT_FALLBACK_SELFSIGNED` | `true` | Install a local certificate when every authority fails. |
 | `CERT_STAGING` | `false` | Use the authority's staging environment. |
 | `CERT_ACME_SERVER` | — | Raw ACME directory URL, overriding the table (private CA). |
-| `CERT_ACME_ARGS` | — | Extra raw acme.sh arguments (escape hatch). |
+| `CERT_ACME_ARGS` | — | Extra raw acme.sh arguments (escape hatch). Quoted as on a command line: `--pre-hook "systemctl stop app"`. |
 | `CERT_ACME_TIMEOUT` | `5m` | Time budget per attempt, so one dead authority cannot stall the chain. |
 
 #### Credentials

@@ -61,3 +61,46 @@ test_compares_versions() {
   assert_ok    util::version_ge 3.1.4 3.1.4
   assert_fails util::version_ge 3.0.9 3.1.0
 }
+
+# CERT_ACME_ARGS is the documented escape hatch for acme.sh options nginx-cert
+# does not expose -- and the ones that need it most, the hooks, are exactly the
+# ones that carry spaces. Splitting on whitespace turned
+#   --pre-hook "systemctl stop app"
+# into four broken tokens.
+test_splits_a_command_line_honouring_quotes() {
+  local -a args=()
+  util::split_args args '--pre-hook "systemctl stop app" --debug 2'
+  assert_eq '4' "${#args[@]}"
+  assert_eq '--pre-hook'         "${args[0]}"
+  assert_eq 'systemctl stop app' "${args[1]}"
+  assert_eq '--debug'            "${args[2]}"
+  assert_eq '2'                  "${args[3]}"
+
+  util::split_args args "--notify-hook 'echo a b'"
+  assert_eq 'echo a b' "${args[1]}" 'single quotes too'
+
+  util::split_args args ''
+  assert_eq '0' "${#args[@]}" 'an empty value yields no argument'
+}
+
+test_reports_unbalanced_quotes_instead_of_mangling_them() {
+  local -a args=()
+  assert_fails util::split_args args '--pre-hook "never closed'
+}
+
+# Quoting rules, not shell evaluation: a command substitution must reach
+# acme.sh as text, not run while the configuration is being read.
+test_does_not_evaluate_what_it_splits() {
+  local -a args=()
+  util::split_args args '--foo $(id -u) `whoami`'
+  assert_contains "${args[*]}" '$(id'
+  assert_contains "${args[*]}" 'whoami'
+}
+
+# The debug line is what an operator reads to find out what was actually run,
+# and "${cmd[*]}" makes one argument carrying spaces look like several.
+test_quotes_arguments_containing_spaces_for_display() {
+  assert_eq "--pre-hook 'echo one two' --debug 2" \
+    "$(util::quote_args --pre-hook 'echo one two' --debug 2)"
+  assert_eq '--force -d example.com' "$(util::quote_args --force -d example.com)"
+}

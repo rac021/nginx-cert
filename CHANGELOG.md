@@ -130,6 +130,15 @@ against the built image before being fixed, and each one now has a test.
   file returned, not when the run finished, so the suite silently depended on
   filename order — and a file that failed to source contributed no tests and no
   failure.
+- `CERT_ACME_ARGS` split on whitespace and nothing else, so the escape hatch
+  could not carry `--pre-hook "systemctl stop app"` — precisely the kind of
+  option it exists for. It follows command-line quoting rules now, without
+  shell evaluation: a `$(...)` reaches acme.sh as text rather than running
+  while the configuration is read. Unbalanced quotes are reported instead of
+  silently mangled.
+- The lock's wait parameter could never succeed: it was implemented with
+  `flock -w`, which BusyBox does not have, so asking to wait failed instantly
+  with a usage error even when the lock was free.
 
 ### Added
 

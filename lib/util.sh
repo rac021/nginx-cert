@@ -95,6 +95,50 @@ util::human_duration() {
   printf '%s' "${out:-0s}"
 }
 
+# Split a command-line string into arguments the way a shell would.
+#
+# "read -r -a" splits on whitespace and nothing else, so the documented escape
+# hatch could not carry --pre-hook "systemctl stop app" -- precisely the kind
+# of option nobody exposes and everybody eventually needs. xargs applies shell
+# quoting rules without shell evaluation, which is the point: a $(...) in the
+# value reaches acme.sh as text instead of running while the configuration is
+# being read.
+#
+# Returns 1 when the quoting is unbalanced, so the caller can say so rather
+# than pass a mangled command line on.
+# usage: util::split_args <array_name> <string>
+util::split_args() {
+  local -n _split_out=$1
+  local s=$2 parsed
+  _split_out=()
+  [[ -z $s ]] && return 0
+  parsed=$(printf '%s' "$s" | xargs -n1 printf '%s\n' 2>/dev/null) || return 1
+  local line
+  while IFS= read -r line; do [[ -n $line ]] && _split_out+=("$line"); done <<<"$parsed"
+  return 0
+}
+
+# Render arguments for display, quoting the ones that contain whitespace.
+#
+# "${cmd[*]}" flattens an array into one space-separated string, so a single
+# argument carrying spaces reads exactly like several -- which is unhelpful in
+# the one log line an operator consults to find out what was actually run.
+# usage: util::quote_args <arg>...
+util::quote_args() {
+  local q=\' bs=\\
+  local out='' a esc
+  for a in "$@"; do
+    if [[ -z $a || $a == *[[:space:]]* || $a == *"$q"* ]]; then
+      # Shell-style escaping of an embedded quote: ' -> '\''
+      esc=${a//"$q"/${q}${bs}${q}${q}}
+      out+="${out:+ }${q}${esc}${q}"
+    else
+      out+="${out:+ }${a}"
+    fi
+  done
+  printf '%s' "$out"
+}
+
 # Filesystem-safe lineage name: *.example.org -> wildcard.example.org
 util::sanitize_name() {
   local n=${1:-}

@@ -30,8 +30,9 @@ declare -A NC_SPEC_PROFILE=()
 declare -A NC_SPEC_STAGING=()
 declare -A NC_SPEC_HSTS=()
 declare -A NC_SPEC_REDIRECT=()
+declare -A NC_SPEC_RENEW_DAYS=()
 
-readonly NC_SPEC_KEYS=(name provider upstream challenge dns key_type profile staging hsts redirect)
+readonly NC_SPEC_KEYS=(name provider upstream challenge dns key_type profile staging hsts redirect renew_days)
 
 # Every CERT_* variable the program understands. Kept explicit rather than
 # derived, so an unknown variable can be reported instead of silently ignored:
@@ -126,7 +127,12 @@ config::load() {
   CFG_PROXY_CONNECT_TIMEOUT=$(config::_default CERT_PROXY_CONNECT_TIMEOUT 10s)
   CFG_CLIENT_MAX_BODY_SIZE=$(config::_default CERT_CLIENT_MAX_BODY_SIZE 16m)
   CFG_WORKER_CONNECTIONS=$(config::_default CERT_WORKER_CONNECTIONS 2048)
-  CFG_RESOLVER=$(config::_default CERT_RESOLVER '127.0.0.11 1.1.1.1 8.8.8.8')
+  # Docker's embedded resolver, and nothing else by default. nginx queries the
+  # listed resolvers in turn, so adding public servers meant a Compose service
+  # name was periodically asked of 1.1.1.1, answered NXDOMAIN, and the request
+  # failed with 502 for no visible reason. Add public resolvers explicitly if
+  # your upstream is a public name.
+  CFG_RESOLVER=$(config::_default CERT_RESOLVER '127.0.0.11')
   CFG_ACCESS_LOG=$(config::_default CERT_ACCESS_LOG true)
   CFG_REAL_IP_FROM=$(util::trim "${CERT_REAL_IP_FROM:-}")
 
@@ -249,6 +255,32 @@ config::_parse_one_spec() {
   NC_SPEC_STAGING[$name]=${opt[staging]:-$CFG_STAGING}
   NC_SPEC_HSTS[$name]=${opt[hsts]:-$CFG_HSTS}
   NC_SPEC_REDIRECT[$name]=${opt[redirect]:-$CFG_HTTP_REDIRECT}
+  # Per certificate, because the threshold only means anything relative to a
+  # lifetime: 30 days is right for a 90-day certificate and absurd for a
+  # 160-hour one, and a container can legitimately hold both.
+  NC_SPEC_RENEW_DAYS[$name]=${opt[renew_days]:-$CFG_RENEW_DAYS}
+}
+
+# Is this a usable "host", "host:port" or "scheme://host:port" upstream?
+#
+# It is the value users touch most, and the only one that reached the nginx
+# configuration unchecked: a stray quote closed the generated string early and
+# injected directives, and a typo in the port produced a 502 at request time
+# with nothing in the logs pointing at the cause.
+config::valid_upstream() {
+  local u=${1:-}
+  [[ -z $u ]] && return 0
+  u=${u#http://}; u=${u#https://}
+  u=${u%/}
+  local host=$u port=''
+  case $u in
+    \[*\]:*) host=${u%:*}; port=${u##*:} ;;   # [2001:db8::1]:8080
+    \[*\])   host=$u ;;                       # [2001:db8::1]
+    *:*)     host=${u%:*}; port=${u##*:} ;;
+  esac
+  [[ $host =~ ^\[[0-9A-Fa-f:.]+\]$ || $host =~ ^[A-Za-z0-9]([A-Za-z0-9._-]*[A-Za-z0-9])?$ ]] || return 1
+  [[ -z $port ]] && return 0
+  [[ $port =~ ^[1-9][0-9]{0,4}$ ]] && ((port >= 1 && port <= 65535))
 }
 
 # --- Validation ------------------------------------------------------------
@@ -262,8 +294,10 @@ config::validate() {
 
   [[ $CFG_ATTEMPTS =~ ^[1-9][0-9]*$ ]] || log::die "$EX_CONFIG" \
     "CERT_ATTEMPTS='${CFG_ATTEMPTS}' must be a strictly positive integer."
-  [[ $CFG_RENEW_DAYS =~ ^[0-9]+$ ]] || log::die "$EX_CONFIG" \
-    "CERT_RENEW_DAYS='${CFG_RENEW_DAYS}' must be an integer."
+  # No leading zeros: (( )) reads 030 as octal 24, and 08 is not a number at
+  # all -- a threshold silently 6 days early, or a fatal arithmetic error.
+  [[ $CFG_RENEW_DAYS =~ ^(0|[1-9][0-9]*)$ ]] || log::die "$EX_CONFIG" \
+    "CERT_RENEW_DAYS='${CFG_RENEW_DAYS}' must be an integer, without a leading zero."
 
   # Every duration goes through the same parser, so "5s" and "45m" mean the
   # same thing everywhere. These two used to be read as bare integers: a unit
@@ -309,6 +343,9 @@ config::validate() {
       "CERT_PROVIDER='${CFG_PROVIDER}' is unknown. Available: $(provider::list_ids | tr '\n' ' ')selfsigned"
   fi
 
+  config::valid_upstream "$CFG_UPSTREAM" || log::die "$EX_CONFIG" \
+    "CERT_UPSTREAM='${CFG_UPSTREAM}' is not a valid host, host:port or scheme://host:port."
+
   # Per-certificate consistency.
   #
   # Every per-line option is checked exactly like its global counterpart. They
@@ -320,6 +357,12 @@ config::validate() {
   for name in ${NC_SPEC_NAMES[@]+"${NC_SPEC_NAMES[@]}"}; do
     kind=${NC_SPEC_KIND[$name]}
     local -a doms=(); read -r -a doms <<<"${NC_SPEC_DOMAINS[$name]}"
+
+    config::valid_upstream "${NC_SPEC_UPSTREAM[$name]}" || log::die "$EX_CONFIG" \
+      "CERT_DOMAINS: upstream='${NC_SPEC_UPSTREAM[$name]}' ('${name}') is not a valid host, host:port or scheme://host:port."
+
+    [[ ${NC_SPEC_RENEW_DAYS[$name]} =~ ^(0|[1-9][0-9]*)$ ]] || log::die "$EX_CONFIG" \
+      "CERT_DOMAINS: renew_days='${NC_SPEC_RENEW_DAYS[$name]}' ('${name}') must be an integer, without a leading zero."
 
     util::assert_bool "CERT_DOMAINS staging= ('${name}')" "${NC_SPEC_STAGING[$name]}"
     util::assert_bool "CERT_DOMAINS redirect= ('${name}')" "${NC_SPEC_REDIRECT[$name]}"
@@ -375,6 +418,22 @@ config::validate() {
         "Provider '${CFG_PROVIDER}' requires External Account Binding. Set CERT_EAB_KID and CERT_EAB_HMAC_KEY$( [[ $CFG_PROVIDER == zerossl ]] && printf ', or simply CERT_ZEROSSL_API_KEY')."
     fi
   fi
+
+  # nginx keeps the first server block for a duplicated server_name and warns
+  # about a "conflicting server name" -- so one of the two certificates was
+  # issued, renewed and then never used to serve anything.
+  local -A seen_domain=()
+  local dom
+  for name in ${NC_SPEC_NAMES[@]+"${NC_SPEC_NAMES[@]}"}; do
+    local -a doms=(); read -r -a doms <<<"${NC_SPEC_DOMAINS[$name]}"
+    for dom in ${doms[@]+"${doms[@]}"}; do
+      if [[ -n ${seen_domain[$dom]:-} ]]; then
+        log::die "$EX_CONFIG" \
+          "CERT_DOMAINS: '${dom}' is declared by two certificates ('${seen_domain[$dom]}' and '${name}'). nginx would serve only one of them."
+      fi
+      seen_domain[$dom]=$name
+    done
+  done
 
   if util::is_true "$CFG_ENABLE" && ((${#NC_SPEC_NAMES[@]} == 0)); then
     log::warn "CERT_ENABLE is on but CERT_DOMAINS is empty: no certificate will be managed, nginx starts on its own."

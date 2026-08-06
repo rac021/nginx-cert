@@ -58,6 +58,14 @@ domain::is_ipv6() {
   return 0
 }
 
+domain::_is_reserved_tld() {
+  local tld reserved; tld=$(util::lower "${1:-}")
+  for reserved in "${NC_RESERVED_TLDS[@]}"; do
+    [[ $tld == "$reserved" ]] && return 0
+  done
+  return 1
+}
+
 domain::_ipv4_is_private() {
   local ip=$1
   local IFS='.'; read -r a b _ _ <<<"$ip"
@@ -91,12 +99,22 @@ domain::kind() {
   if [[ $d == \*.* ]]; then
     local base=${d#\*.}
     [[ $base == *\** ]] && { printf 'invalid'; return; }
-    if domain::valid_hostname "$base" && [[ $base == *.* ]]; then
+    if ! domain::valid_hostname "$base"; then
+      printf 'invalid'; return
+    fi
+    if [[ $base == *.* ]]; then
       case "$(domain::kind "$base")" in
         fqdn) printf 'wildcard' ;;
         *)    printf 'internal' ;;
       esac
+    elif domain::_is_reserved_tld "$base" || [[ $base == localhost ]]; then
+      # "*.test", "*.lan", "*.home" are ordinary development names, and the
+      # local authority is exactly the one that can sign them. Rejecting them
+      # as invalid stopped the container at startup instead.
+      printf 'internal'
     else
+      # "*.com" and friends: no authority issues a wildcard over a public
+      # suffix, so this is a mistake worth reporting rather than self-signing.
       printf 'invalid'
     fi
     return
@@ -122,12 +140,50 @@ domain::kind() {
   # A single label with no dot can never be certified publicly.
   [[ $d != *.* ]] && { printf 'internal'; return; }
 
-  local tld=${d##*.} reserved
-  for reserved in "${NC_RESERVED_TLDS[@]}"; do
-    [[ $tld == "$reserved" ]] && { printf 'internal'; return; }
-  done
+  domain::_is_reserved_tld "${d##*.}" && { printf 'internal'; return; }
 
   printf 'fqdn'
+}
+
+# Expand an IPv6 address to its full eight-group form.
+#
+# OpenSSL prints a SAN as "FD00:0:0:0:0:0:0:1" while the user wrote "fd00::1".
+# Compared as strings, the certificate appeared not to cover the very name it
+# had just been issued for, so no IPv6 certificate could pass verification --
+# not even a self-signed one, which left the container unable to start.
+domain::normalise_ip6() {
+  local ip; ip=$(util::lower "${1:-}")
+  domain::is_ipv6 "$ip" || { printf '%s' "$ip"; return; }
+
+  local head=$ip tail=''
+  if [[ $ip == *::* ]]; then head=${ip%%::*}; tail=${ip#*::}; fi
+
+  local -a h=() t=()
+  [[ -n $head ]] && IFS=':' read -r -a h <<<"$head"
+  [[ -n $tail ]] && IFS=':' read -r -a t <<<"$tail"
+
+  local -a groups=()
+  local g
+  for g in ${h[@]+"${h[@]}"}; do groups+=("$g"); done
+  if [[ $ip == *::* ]]; then
+    local missing=$((8 - ${#h[@]} - ${#t[@]}))
+    while ((missing-- > 0)); do groups+=(0); done
+  fi
+  for g in ${t[@]+"${t[@]}"}; do groups+=("$g"); done
+
+  local out=''
+  for g in ${groups[@]+"${groups[@]}"}; do
+    # An IPv4-mapped tail ("::ffff:192.0.2.1") is not a hex group: keep it.
+    if [[ $g == *.* ]]; then out+="${out:+:}${g}"; else out+="${out:+:}$(printf '%x' "$((16#${g:-0}))")"; fi
+  done
+  printf '%s' "$out"
+}
+
+# Canonical form for comparing a requested name with a name read from a
+# certificate: lowercase, and IPv6 expanded so both spellings meet.
+domain::name_key() {
+  local n; n=$(util::lower "${1:-}")
+  if domain::is_ipv6 "$n"; then domain::normalise_ip6 "$n"; else printf '%s' "$n"; fi
 }
 
 # Can a public certificate authority validate this kind of name?

@@ -65,7 +65,11 @@ jobs:
   build:
     name: Build and publish
     runs-on: ubuntu-latest
-    needs: [lint, test]
+    # "scan" is a gate, not a report: with ignore-unfixed it only fails on a
+    # vulnerability that already has a fix, and publishing an image we know how
+    # to fix is not a release. It used to run alongside "build", so a red scan
+    # and a pushed image happened in the same run.
+    needs: [lint, test, scan]
     # Never publish from a pull request: secrets are unavailable to forks, and
     # a PR must not be able to overwrite the published tags.
     if: github.event_name != 'pull_request'

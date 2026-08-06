@@ -50,8 +50,11 @@ run_unit() {
 
   TEST_TMPDIR=$(mktemp -d)
   export TEST_TMPDIR
+  # EXIT, not RETURN: a RETURN trap also fires when each sourced test file
+  # returns, so the shared temporary directory was deleted before the second
+  # file ran -- and the suite silently depended on filename order.
   # shellcheck disable=SC2064
-  trap "rm -rf '$TEST_TMPDIR'" RETURN
+  trap "rm -rf '$TEST_TMPDIR'" EXIT
 
   # Production code is loaded exactly the way the container loads it.
   # shellcheck source=../lib/bootstrap.sh
@@ -67,9 +70,15 @@ run_unit() {
   for f in "${NC_ROOT}"/tests/unit/*.test.sh; do
     [[ -e $f ]] || continue
     (
+      # A file that fails to source defines none of its tests, and reporting
+      # "0 failed" for it made the whole suite pass while nothing ran.
       # shellcheck disable=SC1090
-      source "$f"
+      source "$f" || { printf '\033[31m  [FAIL]\033[0m %s could not be sourced\n' "${f##*/}"; exit 1; }
       run_tests_in_file "$f"
+      if ((TESTS_RUN == 0)); then
+        printf '\033[31m  [FAIL]\033[0m %s defines no test\n' "${f##*/}"
+        exit 1
+      fi
       exit $((TESTS_FAILED > 0))
     ) || GLOBAL_RC=1
   done

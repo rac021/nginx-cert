@@ -40,9 +40,14 @@ services:
       CERT_MANAGE_VHOSTS: "false"
     volumes:
       - nginx-cert-data:/data
-      # Your own servers. Anything here is included; nginx-cert only ever
-      # deletes the files it generated itself (prefixed "nginx-cert.").
-      - ./conf.d:/etc/nginx/conf.d:ro
+      # Your own server, mounted as a FILE rather than over the directory.
+      # nginx-cert writes its own generated files into /etc/nginx/conf.d --
+      # the ACME challenge, the HTTP-to-HTTPS redirect and /healthz among them
+      # -- so mounting the whole directory, read-only or not, replaces them
+      # with yours and the container can neither renew nor answer its own
+      # health check. It only ever deletes files it generated itself (prefixed
+      # "nginx-cert."), so your file is safe next to them.
+      - ./conf.d/my-site.conf:/etc/nginx/conf.d/my-site.conf:ro
 
 volumes:
   nginx-cert-data:

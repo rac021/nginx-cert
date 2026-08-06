@@ -29,6 +29,7 @@ NC_SHUTTING_DOWN=0
 NC_NGINX_PID=''
 NC_SCHED_PID=''
 NC_SLEEP_PID=''
+NC_ISSUE_PID=''
 
 # --- Signals ---------------------------------------------------------------
 on_signal() {
@@ -37,6 +38,7 @@ on_signal() {
   log::info "Shutdown signal received."
 
   [[ -n $NC_SLEEP_PID ]] && kill "$NC_SLEEP_PID" 2>/dev/null
+  [[ -n $NC_ISSUE_PID ]] && kill -TERM "$NC_ISSUE_PID" 2>/dev/null
   if [[ -n $NC_SCHED_PID ]]; then
     kill -TERM "$NC_SCHED_PID" 2>/dev/null || true
   fi
@@ -103,7 +105,11 @@ supervise() {
       wait "$NC_NGINX_PID" 2>/dev/null || rc=$?
       ((NC_SHUTTING_DOWN)) && break
       log::error "nginx stopped unexpectedly (exit ${rc}). Terminating the container."
-      return "${rc:-1}"
+      # Never propagate a zero status here: nginx exiting cleanly on its own is
+      # still the service disappearing, and a container that exits 0 is not
+      # restarted by "restart: on-failure".
+      ((rc)) || rc=1
+      return "$rc"
     fi
     if [[ -n $NC_SCHED_PID ]] && ! kill -0 "$NC_SCHED_PID" 2>/dev/null; then
       log::warn "The scheduler stopped: restarting it."
@@ -126,7 +132,15 @@ main() {
     case $1 in
       serve) shift ;;
       certme) shift; exec "${NC_ROOT}/bin/certme" "$@" ;;
-      *) if command -v "$1" >/dev/null 2>&1; then exec "$@"; fi ;;
+      *)
+        command -v "$1" >/dev/null 2>&1 && exec "$@"
+        # Falling through here used to start the whole server as if nothing had
+        # been asked, so a typo -- or "docker run <image> renew", the version-1
+        # habit MIGRATION.md warns about -- silently did something else
+        # entirely.
+        log::die "$EX_CONFIG" \
+          "Unknown command '$1'. Use 'serve' (the default), 'certme <command>' -- for example 'certme renew' -- or the path to an executable."
+        ;;
     esac
   fi
 
@@ -151,8 +165,19 @@ main() {
     log::section "Certificates"
     # A failure here must not keep the service down: the temporary
     # certificates are in place and the scheduler will retry.
-    NC_NO_PERSIST_WARN=1 "${NC_ROOT}/bin/certme" issue \
-      || log::warn "Some certificates could not be obtained; the service starts anyway."
+    #
+    # Backgrounded and waited for, rather than run in the foreground: bash does
+    # not run a trap while it waits on a foreground command, so "docker stop"
+    # during the very first issuance sat out the entire grace period and ended
+    # in SIGKILL -- every in-flight request cut, exit 137. "wait" is
+    # interruptible, so the shutdown handler fires immediately.
+    NC_NO_PERSIST_WARN=1 "${NC_ROOT}/bin/certme" issue &
+    NC_ISSUE_PID=$!
+    local issue_rc=0
+    wait "$NC_ISSUE_PID" || issue_rc=$?
+    NC_ISSUE_PID=''
+    ((NC_SHUTTING_DOWN)) && return 0
+    ((issue_rc)) && log::warn "Some certificates could not be obtained; the service starts anyway."
   fi
 
   start_scheduler

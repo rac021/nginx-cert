@@ -25,7 +25,10 @@ services:
     environment:
       CERT_PROVIDER: harica
       CERT_EMAIL: you@institution.example
-      CERT_DOMAINS: service.institution.example
+      # A real, publicly resolvable name. ".example" is a reserved TLD
+      # (RFC 2606): nginx-cert classifies it as internal and signs it locally,
+      # so HARICA would never be contacted at all.
+      CERT_DOMAINS: service.your-university.fr
       CERT_UPSTREAM: app:8080
       CERT_EAB_KID: ${HARICA_EAB_KID:?HARICA_EAB_KID is required}
       CERT_EAB_HMAC_KEY: ${HARICA_EAB_HMAC:?HARICA_EAB_HMAC is required}

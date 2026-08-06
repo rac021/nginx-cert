@@ -20,10 +20,13 @@ services:
         www.example.com, example.com | upstream=site:8080
 
         # IP addresses are issued under Let'"'"'s Encrypt'"'"'s "shortlived" profile
-        # (~160 h). Its own threshold is set per line below.
-        203.0.113.10                 | upstream=site:8080
+        # (~160 h). A 30-day threshold on a 6-day certificate would mean
+        # "always due", so this line carries its own: renew_days= overrides
+        # CERT_RENEW_DAYS for this certificate only.
+        203.0.113.10                 | upstream=site:8080 renew_days=2
 
       # -- how long before expiry to renew --------------------------------
+      # The default for every certificate that does not set renew_days itself.
       # 30 days on a 90-day certificate leaves roughly 60 attempts before it
       # could expire. Certificate lifetimes are shrinking industry-wide, so a
       # threshold in days survives changes a calendar date would not.

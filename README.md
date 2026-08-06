@@ -241,21 +241,28 @@ selfsigned             Local authority            no        all               ye
 zerossl-rest           ZeroSSL (REST API)         no        ip                no -- CERT_ZEROSSL_API_KEY unset
 ```
 
-`certme status --json`, for monitoring:
+`certme status --json`, for monitoring. The certificates come wrapped in an
+object carrying the nginx-cert version, so a filter reads
+`.certificates[]`:
 
 ```json
 {
-  "name": "example.com",
-  "domains": ["example.com", "www.example.com"],
-  "kind": "fqdn",
-  "provider": "auto",
-  "exists": true,
-  "days_left": 89,
-  "not_after": "2026-10-29 01:18:36Z",
-  "issuer": "C=US, O=Let's Encrypt, CN=R11",
-  "self_signed": false,
-  "renewal_needed": false,
-  "renewal_reason": ""
+  "version": "2.0.1",
+  "certificates": [
+    {
+      "name": "example.com",
+      "domains": ["example.com", "www.example.com"],
+      "kind": "fqdn",
+      "provider": "auto",
+      "exists": true,
+      "days_left": 89,
+      "not_after": "2026-10-29 01:18:36Z",
+      "issuer": "C=US, O=Let's Encrypt, CN=R11",
+      "self_signed": false,
+      "renewal_needed": false,
+      "renewal_reason": ""
+    }
+  ]
 }
 ```
 
@@ -320,14 +327,15 @@ Options after `|` apply to that certificate only and override the global value:
 |-------------|-------------------------------------------------------------|
 | `upstream`  | Backend to proxy to (`host:port` or `scheme://host:port`)   |
 | `provider`  | Pin a certificate authority for this certificate            |
-| `name`      | Lineage name (defaults to the first domain)                 |
+| `name`      | Lineage name (defaults to the first domain, `wildcard.<base>` for a wildcard) |
 | `challenge` | `http-01` or `dns-01`                                       |
 | `dns`       | acme.sh DNS module (`dns_cf`, `dns_ovh`, …)                 |
 | `key_type`  | `ec-256`, `ec-384`, `ec-521`, `2048`, `3072`, `4096`        |
 | `profile`   | Certificate profile (e.g. Let's Encrypt `shortlived`)       |
 | `staging`   | `true` to use this authority's staging environment          |
 | `hsts`      | HSTS header value, or `off`                                 |
-| `redirect`  | `false` to disable the HTTP → HTTPS redirect                |
+| `redirect`  | `false` to disable the HTTP → HTTPS redirect for this certificate |
+| `renew_days`| Renewal threshold for this certificate, overriding `CERT_RENEW_DAYS` |
 
 Each line becomes one lineage under `/data/certs/<name>/` and one generated
 HTTPS server. An unknown option is a fatal configuration error — a silently
@@ -410,7 +418,7 @@ server blocks in `/etc/nginx/conf.d/`, or `CERT_MANAGE_NGINX=false` to own
 | `CERT_PROVIDER` | `auto` | `auto`, or one of `letsencrypt`, `zerossl`, `actalis`, `google`, `harica`, `certum`, `sectigo`, `sslcom`, `selfsigned`. |
 | `CERT_PROVIDER_CHAIN` | `letsencrypt,zerossl,actalis,google` | Order tried in `auto` mode. |
 | `CERT_ATTEMPTS` | `2` | Attempts per authority before moving to the next one. |
-| `CERT_RETRY_DELAY` | `15` | Initial delay in seconds between attempts (doubles, capped at 300). |
+| `CERT_RETRY_DELAY` | `15` | Delay before the next attempt — seconds, or a duration like `30s`, `2m` (doubles, capped at 300s). |
 | `CERT_FALLBACK_SELFSIGNED` | `true` | Install a local certificate when every authority fails. |
 | `CERT_STAGING` | `false` | Use the authority's staging environment. |
 | `CERT_ACME_SERVER` | — | Raw ACME directory URL, overriding the table (private CA). |
@@ -434,9 +442,9 @@ See [Renewal](#renewal) for how these interact and for worked examples.
 | `CERT_KEY_TYPE` | `ec-256` | `ec-256`, `ec-384`, `ec-521`, `2048`, `3072`, `4096`. |
 | `CERT_CHALLENGE` | `auto` | `auto`, `http-01`, `dns-01`. `auto` picks DNS-01 for wildcards. |
 | `CERT_DNS_PROVIDER` | — | acme.sh DNS module for DNS-01 (`dns_cf`, `dns_ovh`, …). |
-| `CERT_DNS_SLEEP` | `20` | Seconds to wait for DNS propagation. |
+| `CERT_DNS_SLEEP` | — | Fixed wait for DNS propagation (`20`, `45s`, `2m`). Left unset, acme.sh polls for propagation instead, which is faster and more reliable. |
 | `CERT_PROFILE` | — | Certificate profile requested from the authority. |
-| `CERT_RENEW_DAYS` | `30` | Renew when fewer than this many days remain. |
+| `CERT_RENEW_DAYS` | `30` | Renew when fewer than this many days remain. Per certificate with `renew_days=`. |
 | `CERT_RENEW_INTERVAL` | `12h` | How often the scheduler checks. |
 | `CERT_RENEW_JITTER` | `30m` | Random extra delay added to each check. |
 | `CERT_FORCE_RENEW` | `false` | Renew even when the certificate is still valid. |
@@ -470,7 +478,7 @@ See [Renewal](#renewal) for how these interact and for worked examples.
 | `CERT_PROXY_TIMEOUT` | `60s` | Upstream read/send timeout. |
 | `CERT_PROXY_CONNECT_TIMEOUT` | `10s` | Upstream connect timeout. |
 | `CERT_WORKER_CONNECTIONS` | `2048` | `worker_connections`. |
-| `CERT_RESOLVER` | `127.0.0.11 1.1.1.1 8.8.8.8` | DNS resolvers used by nginx. |
+| `CERT_RESOLVER` | `127.0.0.11` | DNS resolvers used by nginx to reach the upstream. Docker's embedded resolver only: nginx queries the listed servers in turn, so adding public ones makes a Compose service name periodically resolve to NXDOMAIN and the request fail with 502. Add them only if your upstream is a public name. |
 | `CERT_ACCESS_LOG` | `true` | Write an access log. |
 | `CERT_REAL_IP_FROM` | — | Comma-separated trusted proxy CIDRs (`set_real_ip_from`). |
 
@@ -501,7 +509,7 @@ only in which credentials you need. `certme providers` prints the table with a
 | Certum | `certum` | required | no | no | 90 days | free tier (EU) |
 | Sectigo | `sectigo` | required | yes (DNS-01) | no | varies | commercial |
 | SSL.com | `sslcom` | no | yes (DNS-01) | no | 90 days | account + billing profile |
-| HARICA (GÉANT TCS) | `harica` | required | yes (DNS-01) | no | 1 year | free for members |
+| HARICA (GÉANT TCS) | `harica` | required | yes (DNS-01) | no | ≤ 200 days | free for members |
 | Local CA | `selfsigned` | — | yes | yes | 365 days | — |
 
 ### Let's Encrypt
@@ -658,7 +666,10 @@ volumes:
 
 ### SSL.com
 
-Requires EAB, obtained from the SSL.com customer portal. Same shape as Google:
+No EAB: its directory advertises `externalAccountRequired: false`. What it does
+require is an SSL.com account with a billing profile — ACME registration is
+refused until that exists, with an account-registration error rather than a
+validation one.
 
 ```yaml
 environment:
@@ -885,7 +896,11 @@ environment:
   CERT_RENEW_DAYS: "2"
   CERT_RENEW_INTERVAL: 6h
 
-  # Or, for 90-day IP certificates via ZeroSSL's REST API (paid plan):
+  # Or, for 90-day IP certificates via ZeroSSL's REST API (paid plan). Pinning
+  # the provider is what selects it: ZeroSSL's ACME endpoint does not issue for
+  # IP addresses, so nginx-cert routes the request to the REST API instead. On
+  # "auto" Let's Encrypt is tried first and you get the 6-day certificate.
+  # CERT_DOMAINS: 203.0.113.10 | upstream=app:8080 provider=zerossl
   # CERT_ZEROSSL_API_KEY: ${ZEROSSL_API_KEY}
   # CERT_RENEW_DAYS: "30"
 ```
@@ -1136,10 +1151,14 @@ the same files:
 
 ```yaml
 environment:
+  # $$ , not $ : Compose interpolates $VAR at parse time, so a single dollar
+  # would substitute your shell's (empty) CERTME_CHANGED and the hook would
+  # receive a blank list. Use only commands the image actually has -- curl,
+  # openssl, jq and a shell; "docker" is not among them.
   CERT_POST_HOOK: >-
-    echo "renewed: $CERTME_CHANGED" &&
-    docker kill -s HUP other-proxy 2>/dev/null;
-    curl -fsS -X POST https://hooks.example.com/cert-renewed || true
+    echo "renewed: $$CERTME_CHANGED" &&
+    curl -fsS -X POST -d "certs=$$CERTME_CHANGED"
+    https://hooks.example.com/cert-renewed || true
 ```
 
 A failing hook is reported but never undoes the renewal.
@@ -1540,7 +1559,29 @@ volumes:
 ```
 
 **3. Take over `nginx.conf` entirely.** Set `CERT_MANAGE_NGINX=false` and mount
-your own. You must then keep this location yourself, or renewal will fail:
+your own. Two things must survive in it.
+
+Keep the `conf.d` include at http level — that is how the generated ACME
+server, the HTTP-to-HTTPS redirect, `/healthz` and the directives the generated
+servers rely on reach nginx:
+
+```nginx
+http {
+    # ...
+    include /etc/nginx/conf.d/*.conf;
+}
+```
+
+And write the pid where the container can: it runs as uid 101, which cannot
+create a file in `/var/run`. Either keep the stock `/var/run/nginx.pid` (the
+image pre-creates it with the right owner) or point it at the directory
+nginx-cert owns:
+
+```nginx
+pid /var/run/nginx/nginx.pid;
+```
+
+If you replace the include as well, you own the challenge too:
 
 ```nginx
 location ^~ /.well-known/acme-challenge/ {
@@ -1548,6 +1589,16 @@ location ^~ /.well-known/acme-challenge/ {
     default_type "text/plain";
     try_files $uri =404;
 }
+```
+
+Mount a **file** into `conf.d`, never the directory: mounting over
+`/etc/nginx/conf.d` hides everything nginx-cert generates there, and renewal
+and the health check stop working with no error to show for it.
+
+```yaml
+volumes:
+  - ./conf.d/my-site.conf:/etc/nginx/conf.d/my-site.conf:ro   # yes
+  # - ./conf.d:/etc/nginx/conf.d:ro                           # no
 ```
 
 ---

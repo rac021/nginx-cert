@@ -59,6 +59,98 @@ against the built image before being fixed, and each one now has a test.
   remaining authorities in the chain were never tried.
 - Staging directories are cleaned up under the lock, not before taking it,
   where a second run could delete the directory the first was writing into.
+- `docker stop` during the very first issuance took the whole grace period and
+  ended in SIGKILL: the boot issuance ran in the foreground of PID 1, and bash
+  does not run a trap while it waits on a foreground command.
+- `CERT_MANAGE_NGINX=false` could not start at all, for two independent
+  reasons: the generated servers use `$connection_upgrade`, whose `map` lived
+  in the nginx.conf we no longer write, and a stock nginx.conf writes its pid
+  to a directory uid 101 cannot write.
+- The quota protection was inert in the default configuration. The failure
+  counter was cleared by whichever authority finally succeeded — always the
+  local one — so every boot fired a fresh request at an authority that had just
+  refused.
+- Leaving the staging environment never took effect. acme.sh keeps its own
+  bookkeeping and skips what it believes is not due; its copy looks fresh, so
+  it answered "skip" and the staging certificate stayed. It is now told to
+  renew whenever our reason is one it cannot see: a changed name set, a
+  self-signed certificate in place, or a staging environment we have left.
+- A per-line `staging=true` was compared against the global `CERT_STAGING`, so
+  the certificate was judged due for renewal on every scheduler run, forever.
+- IPv6 names could not be certified: OpenSSL prints a SAN expanded and
+  uppercase, the user writes it compressed, and the two were compared as
+  strings. Not even a self-signed certificate passed verification.
+- `*.test`, `*.lan` and other wildcards over a reserved TLD were rejected as
+  invalid names and stopped the container, instead of being routed to the local
+  authority. `*.com` stays invalid.
+- A backup nobody checked is not a backup: an unwritable `/data/backups` was
+  logged as a successful backup, and rollback then destroyed the live
+  certificate to restore nothing. The backup is verified before anything is
+  removed.
+- An unopenable lock file was reported as "another operation is already
+  running", so a read-only or wrongly-owned volume made every renewal fail
+  forever with a message pointing at the wrong problem.
+- `certme status --json` emitted `"days_left":0` where the value was unknown,
+  and built its `domains` array by an unquoted expansion — which is also a
+  glob, so a wildcard certificate was matched against the working directory.
+- The per-attempt timeout branch never fired: it tested for 124, GNU coreutils'
+  status, while BusyBox kills with SIGTERM and the shell reports 143.
+- A DNS-01 failure was explained as a port-80 problem, because the generic
+  `404` pattern was matched before the DNS-specific ones.
+- `--dnssleep` was always passed, which replaces acme.sh's propagation polling
+  with a blind fixed wait. It is now sent only when `CERT_DNS_SLEEP` is set.
+- The default `CERT_RESOLVER` listed public DNS servers alongside Docker's.
+  nginx queries them in turn, so a Compose service name periodically resolved
+  to NXDOMAIN and the request failed with 502 for no visible reason.
+- A private ACME server could not be used for internal names: they were
+  filtered out as non-public before the overridden directory was ever
+  consulted, which is exactly what `CERT_ACME_SERVER` is for.
+- `CERT_UPSTREAM` was the only user value reaching the nginx configuration
+  unchecked. A stray quote closed the generated string and injected directives;
+  a typo in the port produced a 502 with nothing in the logs to explain it.
+- The same domain declared by two certificates is now refused. nginx served
+  only one of them and warned about a conflicting server name, while the other
+  was issued and renewed forever without serving anyone.
+- `CERT_RENEW_DAYS=030` was read as octal 24, and `08` was a fatal arithmetic
+  error.
+- JSON log mode emitted raw control characters, which no parser accepts —
+  reachable through any acme.sh trace, which is full of colour codes.
+- `docker run <image> renew`, the version-1 habit MIGRATION.md warns about, and
+  any other unknown command silently started the whole server instead.
+- A container whose nginx died cleanly exited 0, so `restart: on-failure` never
+  fired.
+- An install interrupted between its two renames left the previous certificate
+  under `<name>.previous.<pid>` and nothing ever removed it.
+- `ZeroSSL REST` had no sanity guard on its timeout, so an unparsable
+  `CERT_ZEROSSL_TIMEOUT` became a zero budget: the order was placed and
+  abandoned in the same breath.
+- Publishing is now gated on the vulnerability scan, which used to run
+  alongside the push rather than before it.
+- The test runner deleted its shared temporary directory when the *first* test
+  file returned, not when the run finished, so the suite silently depended on
+  filename order — and a file that failed to source contributed no tests and no
+  failure.
+
+### Added
+
+- `renew_days=` per certificate. The renewal threshold only means something
+  relative to a lifetime: 30 days is right for a 90-day certificate and absurd
+  for a 160-hour one, and a single container can legitimately hold both.
+- `redirect=` per certificate now works. It was parsed, stored, and read by
+  nothing at all.
+
+### Changed
+
+- `CERT_RETRY_DELAY` and `CERT_DNS_SLEEP` accept a duration (`30s`, `2m`) like
+  every other time setting. Plain seconds still work.
+- `CERT_RESOLVER` defaults to `127.0.0.11` alone.
+- Documentation and examples corrected where they described behaviour the code
+  did not have: the ZeroSSL REST path for IP addresses, SSL.com's EAB
+  requirement, HARICA's certificate lifetime, the `certme status --json`
+  wrapper, the wildcard lineage name, the `CERT_POST_HOOK` example (which lost
+  its variable to Compose interpolation and called a binary the image does not
+  have), the read-only `conf.d` mount in the load-balancer example, and the
+  private-CA example's trust-store mount, which was a no-op.
 
 ## [2.0.1] - 2026-08-01
 

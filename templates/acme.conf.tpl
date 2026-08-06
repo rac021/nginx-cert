@@ -37,15 +37,16 @@ server {
         return 200 "ok\n";
     }
 
-%%IF HTTP_REDIRECT%%
     location / {
-        # 308 rather than 301: preserves the request method and body.
-        return 308 %%REDIRECT_TARGET%%;
-    }
-%%ELSE%%
-    location / {
+        # $nc_redirect_target is empty for a host that opted out of the
+        # redirect (per-line "redirect=false", or CERT_HTTP_REDIRECT=false for
+        # all of them), and carries the target otherwise. "if" plus "return" is
+        # one of the two uses of "if" that are safe inside a location.
+        if ($nc_redirect_target) {
+            # 308 rather than 301: preserves the request method and body.
+            return 308 $nc_redirect_target;
+        }
         root  /var/www/html;
         index index.html;
     }
-%%ENDIF%%
 }

@@ -21,14 +21,28 @@ lock::acquire() {
   mkdir -p "$(dirname "$path")" 2>/dev/null || true
 
   if util::have flock; then
-    exec {NC_LOCK_FD}>"$path" || return 1
-    NC_LOCK_PATH=$path
-    if ((wait_s > 0)); then
-      flock -w "$wait_s" "$NC_LOCK_FD" && return 0
-    else
-      flock -n "$NC_LOCK_FD" && return 0
+    # Exit 2, not 1, when the lock file cannot even be opened. The two failures
+    # share nothing but their status: a held lock means "come back later", an
+    # unopenable file means the volume is read-only or owned by someone else --
+    # and reporting that as "another operation is already running" made every
+    # renewal fail forever with a message pointing at the wrong problem.
+    if ! exec {NC_LOCK_FD}>"$path"; then
+      NC_LOCK_FD=''
+      return 2
     fi
-    exec {NC_LOCK_FD}>&-
+    NC_LOCK_PATH=$path
+    # BusyBox flock has no -w: poll instead of failing outright on a usage
+    # error, which is what the documented wait parameter used to do.
+    local waited=0
+    while :; do
+      flock -n "$NC_LOCK_FD" && return 0
+      ((waited >= wait_s)) && break
+      sleep 1
+      waited=$((waited + 1))
+    done
+    if [[ -e /proc/$$/fd/${NC_LOCK_FD} ]]; then
+      exec {NC_LOCK_FD}>&-
+    fi
     NC_LOCK_FD=''; NC_LOCK_PATH=''
     return 1
   fi
@@ -81,7 +95,14 @@ lock::release() {
 # usage: lock::with <path> <max_wait_seconds> <command...>
 lock::with() {
   local path=$1 wait_s=$2; shift 2
-  if ! lock::acquire "$path" "$wait_s"; then
+  local acquire_rc=0
+  lock::acquire "$path" "$wait_s" || acquire_rc=$?
+  if ((acquire_rc == 2)); then
+    log::error "Cannot open the lock file ${path}."
+    log::detail error "The data directory is read-only, or belongs to another user. This is not a concurrent run."
+    return "$EX_CONFIG"
+  fi
+  if ((acquire_rc)); then
     log::error "Another certificate operation is already running (lock: ${path})."
     return "$EX_BUSY"
   fi

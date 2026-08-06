@@ -111,3 +111,24 @@ test_a_private_address_still_stays_local() {
   assert_eq 'internal' "$(domain::aggregate_kind '192.168.1.10')"
   assert_fails domain::is_acme_capable "$(domain::aggregate_kind '192.168.1.10')"
 }
+
+# OpenSSL prints an IPv6 SAN expanded and uppercase; the user writes it
+# compressed. Compared as strings they never matched, so no IPv6 certificate
+# could pass verification -- not even a self-signed one.
+test_normalises_ipv6_for_comparison() {
+  assert_eq "$(domain::name_key 'FD00:0:0:0:0:0:0:1')" "$(domain::name_key 'fd00::1')"
+  assert_eq "$(domain::name_key '2001:0db8:0000:0000:0000:0000:0000:0001')" \
+            "$(domain::name_key '2001:db8::1')"
+  assert_eq '0:0:0:0:0:0:0:1' "$(domain::name_key '::1')"
+  assert_eq 'fe80:0:0:0:0:0:0:0' "$(domain::name_key 'fe80::')"
+  assert_eq 'example.com' "$(domain::name_key 'Example.COM')" 'a name is only lowercased'
+}
+
+# "*.test" and "*.lan" are ordinary development names: rejecting them as
+# invalid stopped the container instead of routing them to the local authority.
+# "*.com" stays invalid -- no authority issues a wildcard over a public suffix.
+test_accepts_a_wildcard_over_a_reserved_tld() {
+  assert_eq 'internal' "$(domain::kind '*.test')"
+  assert_eq 'internal' "$(domain::kind '*.lan')"
+  assert_eq 'invalid'  "$(domain::kind '*.com')"
+}

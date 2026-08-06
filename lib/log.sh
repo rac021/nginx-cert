@@ -133,6 +133,19 @@ log::_json_escape() {
   local s=$1
   s=${s//\\/\\\\}; s=${s//\"/\\\"}
   s=${s//$'\n'/\\n}; s=${s//$'\r'/\\r}; s=${s//$'\t'/\\t}
+  # Every remaining control character, not just the three with a short escape.
+  # A raw byte below 0x20 is illegal inside a JSON string, and acme.sh output
+  # is full of them (colour codes, backspaces) -- one such line and the whole
+  # log stream is rejected by the collector.
+  local c
+  for c in $'\x01' $'\x02' $'\x03' $'\x04' $'\x05' $'\x06' $'\a' $'\b' \
+           $'\v' $'\f' $'\x0e' $'\x0f' $'\x10' $'\x11' $'\x12' $'\x13' \
+           $'\x14' $'\x15' $'\x16' $'\x17' $'\x18' $'\x19' $'\x1a' $'\e' \
+           $'\x1c' $'\x1d' $'\x1e' $'\x1f' $'\x7f'; do
+    [[ $s == *"$c"* ]] || continue
+    printf -v c_esc '\\u%04x' "'$c"
+    s=${s//"$c"/$c_esc}
+  done
   printf '%s' "$s"
 }
 

@@ -109,5 +109,13 @@ bootstrap::cleanup_staging() {
     log::debug "Removing abandoned staging directory: ${d}"
     rm -rf "$d"
   done
+  # An install interrupted between its two renames leaves the previous
+  # certificate under "<name>.previous.<pid>". Nothing read it, and nothing
+  # removed it either, so it accumulated in the certificate directory.
+  for d in "${CFG_CERT_DIR}"/*.previous.* "${CFG_CERT_DIR}"/*.restoring.*; do
+    [[ -d $d ]] || continue
+    log::debug "Removing leftover from an interrupted install: ${d}"
+    rm -rf "$d"
+  done
   return 0
 }

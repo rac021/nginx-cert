@@ -99,7 +99,7 @@ acme::issue() {
     --log "${CFG_ACME_HOME}/acme.log"
     --server "$server"
     --keylength "$key_type"
-    --days "$CFG_RENEW_DAYS"
+    --days "${NC_SPEC_RENEW_DAYS[$name]:-$CFG_RENEW_DAYS}"
     --email "$CFG_EMAIL"
     --cert-file "${outdir}/cert.pem"
     --key-file "${outdir}/privkey.pem"
@@ -111,7 +111,12 @@ acme::issue() {
   for d in "${domains[@]}"; do cmd+=(-d "$d"); done
 
   if [[ $challenge == dns-01 ]]; then
-    cmd+=(--dns "$dns_provider" --dnssleep "$CFG_DNS_SLEEP_S")
+    cmd+=(--dns "$dns_provider")
+    # Only when the user asked for it: --dnssleep replaces acme.sh's own
+    # propagation polling with a blind fixed wait, which is both slower and
+    # less reliable. Passing it unconditionally turned the default into the
+    # worse of the two behaviours.
+    [[ -n ${CERT_DNS_SLEEP:-} ]] && cmd+=(--dnssleep "$CFG_DNS_SLEEP_S")
   else
     cmd+=(--webroot "$CFG_WEBROOT")
   fi
@@ -143,7 +148,11 @@ acme::issue() {
   local out rc=0
   out=$(timeout "$timeout_s" "${cmd[@]}" 2>&1) || rc=$?
 
-  if ((rc == 124)); then
+  # 124 is GNU coreutils; BusyBox timeout kills with SIGTERM and the shell
+  # reports 128+15. Alpine ships BusyBox, so the GNU-only test meant the branch
+  # never fired on the image we actually publish: the user saw a bare
+  # "failed (exit 143)" instead of the timeout message and its remedy.
+  if ((rc == 124 || rc == 143)); then
     log::warn "$(acme::_authority_label "$provider") did not respond within $(util::human_duration "$timeout_s"): giving up on this authority."
     log::detail warn "Raise CERT_ACME_TIMEOUT if your link is slow."
     return 1
@@ -199,14 +208,17 @@ acme::_explain_failure() {
     # sends them hunting in the wrong place.
     *'Account registration error'*|*'Register account Error'*)
       hint="$(acme::_authority_label "$provider") refused to create the ACME account -- this is not a validation problem. Most authorities require an account, and some also a billing profile, before ACME issuance is enabled. Read the authority's own message just below: it usually states exactly what is missing." ;;
-    *'urn:ietf:params:acme:error:unauthorized'*|*'Invalid response from'*|*'404'*)
-      hint="HTTP-01 validation failed: port 80 must be reachable from the internet and routed to this container. Check the domain's DNS, that port 80 is published, and any firewall." ;;
     *'externalAccountRequired'*|*'external account binding'*)
       hint="$(acme::_authority_label "$provider") requires valid External Account Binding credentials: set CERT_EAB_KID and CERT_EAB_HMAC_KEY.$( [[ -z ${CFG_ACME_SERVER:-} ]] && printf ' %s' "$(provider::notes "$provider")")" ;;
+    # Ahead of the HTTP-01 branch below: its bare '404' pattern matches almost
+    # any acme.sh trace, so a DNS-01 failure was explained as a port-80 problem
+    # and sent the user to check a firewall that had nothing to do with it.
     *'DNS problem'*|*'NXDOMAIN'*|*'no valid A records'*)
       hint="The requested name does not resolve publicly. Fix the DNS record before retrying." ;;
     *'dnsapi'*|*'Add txt record error'*)
       hint="acme.sh's DNS module could not create the TXT record. Check your DNS provider's API credentials." ;;
+    *'urn:ietf:params:acme:error:unauthorized'*|*'Invalid response from'*|*'404'*)
+      hint="HTTP-01 validation failed: port 80 must be reachable from the internet and routed to this container. Check the domain's DNS, that port 80 is published, and any firewall." ;;
     *'Timeout'*|*'timed out'*|*'Could not resolve host'*)
       hint="The ACME server is unreachable from the container (egress network or DNS)." ;;
   esac

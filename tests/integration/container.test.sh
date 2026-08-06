@@ -348,6 +348,101 @@ code=$(docker exec "$CONTAINER" curl -s -o /dev/null -w '%{http_code}' \
   -H 'Host: localhost' http://127.0.0.1/ 2>/dev/null)
 check 'Host: localhost is redirected to HTTPS' '308' "$code"
 
+# -- Scenario 11: docker stop during the very first issuance ----------------
+#
+# The boot issuance ran in the foreground of PID 1, and bash does not run a
+# trap while it waits on a foreground command: "docker stop" sat out the whole
+# grace period and ended in SIGKILL, cutting every in-flight request.
+cleanup
+docker run -d --name "$CONTAINER" --network none \
+  -e CERT_EMAIL='a@b.co' -e CERT_DOMAINS='slow-boot.example.com' \
+  -e CERT_ATTEMPTS=3 -e CERT_ACME_TIMEOUT=60s "$IMAGE" >/dev/null
+for _ in $(seq 1 40); do
+  docker logs "$CONTAINER" 2>&1 | grep -q 'Attempt 1/3' && break
+  sleep 1
+done
+start=$(date +%s)
+docker stop -t 45 "$CONTAINER" >/dev/null
+elapsed=$(( $(date +%s) - start ))
+exit_code=$(docker inspect "$CONTAINER" --format '{{.State.ExitCode}}')
+if ((elapsed <= 10)); then
+  ok "shutdown during issuance is prompt (${elapsed}s)"
+else
+  ko 'shutdown during issuance is prompt' "${elapsed}s"
+fi
+check 'shutdown during issuance exits 0, not SIGKILL' '0' "$exit_code"
+
+# -- Scenario 12: CERT_MANAGE_NGINX=false is a working mode ------------------
+#
+# Two independent reasons it could not start: the generated server blocks use
+# $connection_upgrade, whose map lived in the nginx.conf we no longer write;
+# and a stock nginx.conf writes its pid to /var/run/nginx.pid, in a directory
+# uid 101 cannot write.
+cleanup
+userconf=$(mktemp)
+cat >"$userconf" <<'CONF'
+worker_processes auto;
+events { worker_connections 1024; }
+http {
+    include       /etc/nginx/mime.types;
+    default_type  application/octet-stream;
+    include /etc/nginx/conf.d/*.conf;
+}
+CONF
+# mktemp creates it 0600, and the container reads it as uid 101.
+chmod 644 "$userconf"
+docker run -d --name "$CONTAINER" --network none \
+  -e CERT_EMAIL='a@b.co' -e CERT_DOMAINS='unmanaged.test | upstream=app:8080' \
+  -e CERT_MANAGE_NGINX=false -v "${userconf}:/etc/nginx/nginx.conf:ro" "$IMAGE" >/dev/null
+for _ in $(seq 1 40); do
+  docker logs "$CONTAINER" 2>&1 | grep -q 'nginx-cert is up' && break
+  sleep 1
+done
+rm -f "$userconf"
+check 'the container starts with CERT_MANAGE_NGINX=false' 'running' \
+  "$(docker inspect "$CONTAINER" --format '{{.State.Status}}')"
+if docker logs "$CONTAINER" 2>&1 | grep -qi 'emerg'; then
+  ko 'no emergency in the log with an unmanaged nginx.conf' \
+     "$(docker logs "$CONTAINER" 2>&1 | grep -i emerg | head -2)"
+else
+  ok 'no emergency in the log with an unmanaged nginx.conf'
+fi
+
+# -- Scenario 13: the per-certificate redirect= option is honoured -----------
+cleanup
+docker run -d --name "$CONTAINER" --network none -e CERT_EMAIL='a@b.co' \
+  -e CERT_DOMAINS=$'keep.test | upstream=app:8080\nplain.test | upstream=app:8080 redirect=false' \
+  "$IMAGE" >/dev/null
+for _ in $(seq 1 40); do
+  docker logs "$CONTAINER" 2>&1 | grep -q 'nginx-cert is up' && break
+  sleep 1
+done
+code=$(docker exec "$CONTAINER" curl -s -o /dev/null -w '%{http_code}' \
+  -H 'Host: keep.test' http://127.0.0.1/ 2>/dev/null)
+check 'a certificate without the option still redirects to HTTPS' '308' "$code"
+code=$(docker exec "$CONTAINER" curl -s -o /dev/null -w '%{http_code}' \
+  -H 'Host: plain.test' http://127.0.0.1/ 2>/dev/null)
+check 'redirect=false stops the redirect for that certificate only' '200' "$code"
+
+# -- Scenario 14: an invalid upstream is refused before nginx sees it --------
+out=$(docker run --rm -e CERT_DOMAINS='example.com' -e CERT_EMAIL='a@b.co' \
+        -e CERT_UPSTREAM='app:8080"; return 444; #' "$IMAGE" 2>&1); rc=$?
+check 'an upstream that would inject nginx directives exits with code 2' '2' "$rc"
+if [[ $out == *'CERT_UPSTREAM'* ]]; then
+  ok 'the error names CERT_UPSTREAM'
+else
+  ko 'the error names CERT_UPSTREAM' "$out"
+fi
+
+# -- Scenario 15: an unknown command is an error, not a silent server start --
+out=$(docker run --rm -e CERT_ENABLE=false "$IMAGE" renew 2>&1); rc=$?
+check 'docker run <image> renew exits with code 2' '2' "$rc"
+if [[ $out == *'certme'* ]]; then
+  ok 'the error points at "certme renew"'
+else
+  ko 'the error points at "certme renew"' "$out"
+fi
+
 # -- Result ------------------------------------------------------------------
 printf '\n  %d passed, %d failed\n' "$PASSED" "$FAILED"
 ((FAILED == 0))

@@ -208,10 +208,17 @@ issue::one() {
   fi
   log::debug "Authority chain for '${name}': ${chain[*]}"
 
-  # acme.sh keeps its own bookkeeping; we force renewal when our copy is
-  # missing or when the user explicitly asked for it.
+  # acme.sh keeps its own bookkeeping and skips what it believes is not due.
+  # We override it whenever our reason for renewing is one it cannot see.
   local force=0
-  { util::is_true "${CFG_FORCE_RENEW:-false}" || ! certs::exists "$name"; } && force=1
+  { util::is_true "${CFG_FORCE_RENEW:-false}" || certs::needs_forced_renewal "$name"; } && force=1
+
+  # Tracks whether any real authority refused during this run. The local
+  # rescue that may follow always succeeds, and it used to clear the failure
+  # counter with it -- so the documented quota protection never engaged at all
+  # in the default configuration, and every boot fired a fresh request at an
+  # authority that had just said no.
+  local acme_failed=0
 
   local provider attempt rc staging_dir
   for provider in "${chain[@]}"; do
@@ -232,7 +239,11 @@ issue::one() {
 
       if ((rc == 0)); then
         if certs::install "$name" "$staging_dir"; then
-          issue::_clear_failure "$name"
+          if [[ $provider == selfsigned ]] && ((acme_failed)); then
+            issue::_record_failure "$name"
+          else
+            issue::_clear_failure "$name"
+          fi
           NC_CHANGED+=("$name")
           NC_LAST_PROVIDER[$name]=$provider
           certs::record_provider "$name" "$provider"
@@ -261,6 +272,7 @@ issue::one() {
     done
 
     log::warn "$(issue::_provider_label "$provider") did not deliver '${name}' after ${max_attempts} attempt(s)."
+    [[ $provider != selfsigned ]] && acme_failed=1
     [[ $provider != "${chain[-1]}" ]] && log::info "-> Falling back to the next authority."
   done
 

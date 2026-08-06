@@ -74,11 +74,8 @@ http {
     real_ip_recursive on;
 %%ENDIF%%
 
-    # Transparent relaying of WebSocket connections to upstreams.
-    map $http_upgrade $connection_upgrade {
-        default upgrade;
-        ""      close;
-    }
+    # http-level directives the generated servers rely on ($connection_upgrade).
+    include /etc/nginx/snippets/nginx-cert-http.conf;
 
     # TLS policy shared by every server (see CERT_SSL_POLICY).
     include /etc/nginx/snippets/nginx-cert-tls.conf;

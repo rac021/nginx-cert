@@ -33,8 +33,13 @@ services:
         # No public authority possible: signed by the local CA.
         internal.lan                   | upstream=internal:8080
 
-      # Credentials for the authorities used above. Each is only read by the
-      # authority that needs it.
+      # Credentials for the authorities used above.
+      #
+      # CERT_EAB_KID / CERT_EAB_HMAC_KEY are global: the same pair is offered
+      # to every authority that requires External Account Binding. That is fine
+      # here because only one of them does -- Actalis. ZeroSSL derives its own
+      # EAB from CERT_ZEROSSL_API_KEY, so the two never collide. Two
+      # EAB-requiring authorities in one file would need two containers.
       CERT_EAB_KID: ${ACTALIS_EAB_KID}
       CERT_EAB_HMAC_KEY: ${ACTALIS_EAB_HMAC}
       CERT_ZEROSSL_API_KEY: ${ZEROSSL_API_KEY}

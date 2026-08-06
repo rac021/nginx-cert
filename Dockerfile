@@ -108,7 +108,14 @@ RUN set -eux; \
     printf '<!doctype html><meta charset=utf-8><title>nginx-cert</title><h1>nginx-cert</h1><p>No upstream configured (CERT_UPSTREAM).</p>\n' \
       > /var/www/html/index.html; \
     chown -R nginx:nginx /data /var/www /etc/nginx /var/cache/nginx /var/log/nginx /var/run/nginx; \
-    chmod 755 /data
+    chmod 755 /data; \
+    # Our nginx.conf keeps the pid under /var/run/nginx/, which the runtime user
+    # owns. A user bringing their own nginx.conf (CERT_MANAGE_NGINX=false) keeps
+    # the stock /var/run/nginx.pid, in a directory uid 101 cannot write -- so
+    # nginx died with "open() /run/nginx.pid failed (13: Permission denied)"
+    # before serving anything. Pre-creating the file owned by nginx is enough:
+    # nginx truncates it rather than creating it.
+    install -o nginx -g nginx -m 0644 /dev/null /var/run/nginx.pid
 
 USER nginx
 

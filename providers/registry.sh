@@ -185,6 +185,18 @@ provider::chain_for() {
   local cap=$kind
   [[ $kind == internal || $kind == localhost ]] && cap='none'
 
+  # An internal name is unreachable for a *public* authority, which is why it
+  # normally collapses to the local one. It is not unreachable for a private
+  # ACME server: pointing CERT_ACME_SERVER at step-ca or EJBCA and naming a
+  # carrier provider is the documented way to certify *.internal, *.lan or a
+  # single label -- and it could never work, because the name was filtered out
+  # before the overridden directory was ever consulted.
+  if [[ $cap == none && -n ${CFG_ACME_SERVER:-} && $requested != auto ]]; then
+    log::debug "CERT_ACME_SERVER is set and '${requested}' is pinned: '${kind}' names are sent to it rather than to the local authority."
+    cap=$kind
+    [[ $kind == internal || $kind == localhost ]] && cap='fqdn'
+  fi
+
   local id out=() skipped=()
   for id in ${candidates[@]+"${candidates[@]}"}; do
     if ! provider::exists "$id"; then

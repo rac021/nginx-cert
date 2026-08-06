@@ -7,8 +7,11 @@
 #                   profile automatically; you only need to renew far more
 #                   often (CERT_RENEW_DAYS=2, checked every 6h).
 #
-#   ZeroSSL REST    90 days, but requires a paid plan. Selected automatically
-#                   when CERT_ZEROSSL_API_KEY is set and the name is an IP.
+#   ZeroSSL REST    90 days, but requires a paid plan. Reached by pinning
+#                   provider=zerossl on the line: ZeroSSL's ACME endpoint does
+#                   not issue for IP addresses, so nginx-cert routes the
+#                   request to its REST API instead. Left on "auto", Let's
+#                   Encrypt is tried first and you get the 6-day certificate.
 #
 # The address must be public and reachable on port 80 from the internet.
 # Private ranges (10/8, 192.168/16, ...) are detected and signed by the local
@@ -29,12 +32,15 @@ services:
       CERT_RENEW_INTERVAL: 6h
 
       # -- Variant B: ZeroSSL REST, 90 days, paid plan --------------------
-      # Just add the API key; nginx-cert inserts the REST path into the chain
-      # for IP addresses only.
-      # CERT_ZEROSSL_API_KEY: ${ZEROSSL_API_KEY}
-      # CERT_ZEROSSL_VALIDITY_DAYS: "90"
-      # CERT_RENEW_DAYS: "30"
-      # CERT_RENEW_INTERVAL: 12h
+      # Replace the four lines above with these five. Do not simply uncomment
+      # them: CERT_RENEW_DAYS and CERT_RENEW_INTERVAL would then be declared
+      # twice, and Compose refuses a duplicate key.
+      #
+      #   CERT_DOMAINS: 203.0.113.10 | upstream=app:8080 provider=zerossl
+      #   CERT_ZEROSSL_API_KEY: ${ZEROSSL_API_KEY}
+      #   CERT_ZEROSSL_VALIDITY_DAYS: "90"
+      #   CERT_RENEW_DAYS: "30"
+      #   CERT_RENEW_INTERVAL: 12h
     volumes:
       - nginx-cert-data:/data
 

@@ -11,10 +11,10 @@ _reset_specs() {
   NC_SPEC_NAMES=()
   NC_SPEC_DOMAINS=(); NC_SPEC_KIND=(); NC_SPEC_PROVIDER=(); NC_SPEC_UPSTREAM=()
   NC_SPEC_CHALLENGE=(); NC_SPEC_DNS=(); NC_SPEC_KEY_TYPE=(); NC_SPEC_PROFILE=()
-  NC_SPEC_STAGING=(); NC_SPEC_HSTS=(); NC_SPEC_REDIRECT=()
+  NC_SPEC_STAGING=(); NC_SPEC_HSTS=(); NC_SPEC_REDIRECT=(); NC_SPEC_RENEW_DAYS=()
   CFG_PROVIDER=auto; CFG_UPSTREAM=''; CFG_CHALLENGE=auto; CFG_DNS_PROVIDER=''
   CFG_KEY_TYPE=ec-256; CFG_PROFILE=''; CFG_STAGING=false
-  CFG_HSTS='max-age=31536000'; CFG_HTTP_REDIRECT=true
+  CFG_HSTS='max-age=31536000'; CFG_HTTP_REDIRECT=true; CFG_RENEW_DAYS=30
 }
 
 _parse() { _reset_specs; CERT_DOMAINS=$1 config::_parse_domains; }
@@ -233,4 +233,51 @@ test_rejects_an_invalid_retry_delay() {
 test_rejects_an_invalid_dns_sleep() {
   assert_fails _load_config_fails CERT_EMAIL=a@b.com CERT_DOMAINS=example.com \
     CERT_DNS_SLEEP=later
+}
+
+# --- CERT_UPSTREAM is the value users touch most, and reaches nginx ---------
+
+test_accepts_the_usual_upstream_forms() {
+  local u
+  for u in '' 'app' 'app:8080' 'http://app:8080' 'https://app:8443' \
+           '10.0.0.5:8080' 'my-app.internal:3000' '[2001:db8::1]:8080' 'app:8080/'; do
+    assert_ok config::valid_upstream "$u" "should accept '${u}'"
+  done
+}
+
+test_rejects_an_upstream_that_would_break_the_generated_configuration() {
+  local u
+  # A double quote closed the generated nginx string and injected directives;
+  # the rest are typos that produced a 502 at request time and nothing in the
+  # logs to explain it.
+  for u in 'app:8080"; return 444; #' 'app:notaport' 'app:99999' 'app:0' \
+           'app:8080/api' 'app 8080' 'app;8080'; do
+    assert_fails config::valid_upstream "$u" "should reject '${u}'"
+  done
+}
+
+test_rejects_an_invalid_upstream_at_startup() {
+  assert_fails _load_config_fails CERT_EMAIL=a@b.com CERT_DOMAINS=example.com \
+    'CERT_UPSTREAM=app:notaport'
+}
+
+# nginx keeps the first server block for a duplicated server_name and warns.
+# The second certificate was issued and renewed forever without serving anyone.
+test_rejects_the_same_domain_in_two_certificates() {
+  assert_fails _load_config_fails CERT_EMAIL=a@b.com \
+    "CERT_DOMAINS=$(printf 'example.com | name=one\nexample.com, www.example.com | name=two')"
+}
+
+# A threshold only means something relative to a lifetime: 30 days is right for
+# a 90-day certificate and absurd for a 160-hour one, and one container can
+# legitimately hold both.
+test_accepts_a_per_certificate_renewal_threshold() {
+  _parse $'www.example.com | upstream=site:8080\n203.0.113.10 | renew_days=2'
+  assert_eq '30' "${NC_SPEC_RENEW_DAYS[www.example.com]}" 'the global value by default'
+  assert_eq '2'  "${NC_SPEC_RENEW_DAYS[203.0.113.10]}"
+}
+
+test_rejects_a_non_numeric_per_certificate_threshold() {
+  assert_fails _load_config_fails CERT_EMAIL=a@b.com \
+    "CERT_DOMAINS=example.com | renew_days=soon"
 }

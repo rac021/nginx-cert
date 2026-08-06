@@ -71,6 +71,16 @@ certs::sans() {
     | grep -v '^$'
 }
 
+# The certificate's names in canonical form, one per line, ready to compare
+# with a requested name.
+certs::_san_keys() {
+  local line
+  while IFS= read -r line; do
+    [[ -n $line ]] && domain::name_key "$line" && printf '\n'
+  done < <(certs::sans "$@")
+  return 0
+}
+
 # A certificate signed by our local authority is not publicly trusted: it must
 # be replaced as soon as a real authority becomes reachable again.
 certs::is_selfsigned() {
@@ -125,8 +135,51 @@ certs::recorded_provider() {
 #   - it expires in fewer than CERT_RENEW_DAYS days;
 #   - it no longer covers every requested name (a domain was added);
 #   - it is self-signed while a public authority is now conceivable;
+#   - it came from a staging environment we have since left;
 #   - CERT_FORCE_RENEW is set.
+
+# Does the certificate in place cover every requested name?
 #
+# Shared with certs::needs_forced_renewal so the two can never disagree about
+# what "covers" means.
+certs::covers_requested() {
+  local name=$1
+  local -a want=(); read -r -a want <<<"${NC_SPEC_DOMAINS[$name]:-}"
+  ((${#want[@]})) || return 0
+  local have; have=$(certs::_san_keys "$name" | tr '\n' ' ')
+  local d
+  for d in "${want[@]}"; do
+    [[ " $have " == *" $(domain::name_key "$d") "* ]] || return 1
+  done
+  return 0
+}
+
+# The staging environment this certificate is supposed to come from.
+certs::_wants_staging() {
+  local name=$1
+  util::is_true "${NC_SPEC_STAGING[$name]:-${CFG_STAGING:-false}}"
+}
+
+# Must the ACME client be told to renew, rather than left to decide for itself?
+#
+# acme.sh keeps its own bookkeeping and skips a renewal it believes is not due.
+# That is right when our reason is "expires soon" -- we agree with it. It is
+# wrong when the reason has nothing to do with time: the requested names
+# changed, the certificate in place is self-signed, or we are leaving the
+# staging environment. Its stored copy looks perfectly fresh in all three
+# cases, so it answers "skip" and nothing happens -- which is why the
+# documented go-live flow (test against staging, then set CERT_STAGING=false)
+# never actually took effect.
+certs::needs_forced_renewal() {
+  local name=$1
+  certs::exists "$name"           || return 0
+  certs::is_selfsigned "$name"    && return 0
+  certs::covers_requested "$name" || return 0
+  local issued_by; issued_by=$(certs::recorded_provider "$name" 2>/dev/null || printf '')
+  [[ $issued_by == *-staging ]] && ! certs::_wants_staging "$name" && return 0
+  return 1
+}
+
 # Output: the reason, or an empty string when no renewal is required.
 certs::renewal_reason() {
   local name=$1
@@ -138,17 +191,20 @@ certs::renewal_reason() {
     printf 'CERT_FORCE_RENEW is set'; return 0
   fi
 
+  local threshold=${NC_SPEC_RENEW_DAYS[$name]:-$CFG_RENEW_DAYS}
   local days; days=$(certs::days_left "$name") || { printf 'certificate unreadable'; return 0; }
-  if ((days < CFG_RENEW_DAYS)); then
-    printf 'expires in %s day(s), threshold is %s' "$days" "$CFG_RENEW_DAYS"; return 0
+  if ((days < threshold)); then
+    printf 'expires in %s day(s), threshold is %s' "$days" "$threshold"; return 0
   fi
 
-  local -a want=(); read -r -a want <<<"${NC_SPEC_DOMAINS[$name]}"
-  local have; have=$(certs::sans "$name" | tr '\n' ' ')
-  local d
-  for d in "${want[@]}"; do
-    [[ " $have " == *" $d "* ]] || { printf 'does not cover %s' "$d"; return 0; }
-  done
+  if ! certs::covers_requested "$name"; then
+    local -a want=(); read -r -a want <<<"${NC_SPEC_DOMAINS[$name]}"
+    local have; have=$(certs::_san_keys "$name" | tr '\n' ' ')
+    local d
+    for d in "${want[@]}"; do
+      [[ " $have " == *" $(domain::name_key "$d") "* ]] || { printf 'does not cover %s' "$d"; return 0; }
+    done
+  fi
 
   if certs::is_selfsigned "$name" && [[ ${NC_SPEC_PROVIDER[$name]} != selfsigned ]] \
      && domain::is_acme_capable "${NC_SPEC_KIND[$name]}"; then
@@ -159,9 +215,14 @@ certs::renewal_reason() {
   # environment, then flip CERT_STAGING to false. A staging certificate is
   # valid for 90 days and is not self-signed, so none of the checks above would
   # catch it -- the service would keep serving a certificate no browser trusts.
+  #
+  # Compared against this certificate's own setting, not the global one: with
+  # "staging=true" on a single line -- the very reason the per-line option
+  # exists -- the global default said "staging is off", so the certificate was
+  # judged due for renewal on every single scheduler run, forever.
   local issued_by; issued_by=$(certs::recorded_provider "$name" 2>/dev/null || printf '')
-  if [[ $issued_by == *-staging ]] && ! util::is_true "${CFG_STAGING:-false}"; then
-    printf 'issued by %s while CERT_STAGING is now off' "$issued_by"; return 0
+  if [[ $issued_by == *-staging ]] && ! certs::_wants_staging "$name"; then
+    printf 'issued by %s while staging is now off' "$issued_by"; return 0
   fi
 
   printf ''
@@ -220,10 +281,10 @@ certs::verify_bundle() {
   # Every requested name must be covered.
   local -a want=(); read -r -a want <<<"${NC_SPEC_DOMAINS[$name]:-}"
   if ((${#want[@]})); then
-    local have; have=$(certs::sans "$name" "$leaf" | tr '\n' ' ')
+    local have; have=$(certs::_san_keys "$name" "$leaf" | tr '\n' ' ')
     local d
     for d in "${want[@]}"; do
-      if [[ " $have " != *" $d "* ]]; then
+      if [[ " $have " != *" $(domain::name_key "$d") "* ]]; then
         # A wildcard *.example.org covers a.example.org.
         local covered=0 s
         for s in $have; do
@@ -262,10 +323,16 @@ certs::install() {
   mkdir -p "$CFG_CERT_DIR"
   local backup="${CFG_BACKUP_DIR}/${name}"
   if [[ -d $live ]]; then
+    # A backup nobody checked is not a backup: an unwritable /data/backups or a
+    # copy interrupted by ENOSPC used to be logged as a success, and rollback
+    # then had nothing to restore.
     rm -rf "$backup"
-    mkdir -p "$CFG_BACKUP_DIR"
-    cp -a "$live" "$backup"
-    log::debug "Previous certificate backed up to ${backup}."
+    if mkdir -p "$CFG_BACKUP_DIR" && cp -a "$live" "$backup"; then
+      log::debug "Previous certificate backed up to ${backup}."
+    else
+      rm -rf "$backup"
+      log::warn "Could not back up the current certificate for '${name}': rollback will not be available."
+    fi
   fi
 
   certs::_apply_permissions "$staging"
@@ -290,20 +357,45 @@ certs::rollback() {
   live=$(config::cert_path "$name")
   backup="${CFG_BACKUP_DIR}/${name}"
   [[ -d $backup ]] || { log::error "No backup available for '${name}'."; return 1; }
+  # Check the backup before destroying what is still serving: rolling back onto
+  # an unusable copy would leave nothing at all.
+  if ! certs::verify_bundle "$backup" "$name"; then
+    log::error "The backup of '${name}' is unusable: keeping the certificate currently in place."
+    return 1
+  fi
+  local restored="${live}.restoring.$$"
+  rm -rf "$restored"
+  if ! cp -a "$backup" "$restored"; then
+    rm -rf "$restored"
+    log::error "Could not restore the backup of '${name}': keeping the certificate currently in place."
+    return 1
+  fi
   rm -rf "$live"
-  cp -a "$backup" "$live"
+  mv "$restored" "$live"
   certs::_apply_permissions "$live"
   log::warn "Rolled back '${name}' to the previous certificate."
 }
 
 # --- Machine-readable state ------------------------------------------------
 
+# The requested names as a JSON array body. Read into an array rather than left
+# unquoted: an unquoted expansion is also a glob, and a wildcard certificate
+# would have been matched against the working directory.
+certs::_json_domains() {
+  local -a doms=(); read -r -a doms <<<"${NC_SPEC_DOMAINS[$1]:-}"
+  local out='' d
+  for d in ${doms[@]+"${doms[@]}"}; do
+    out+="${out:+,}\"$(log::_json_escape "$d")\""
+  done
+  printf '%s' "$out"
+}
+
 certs::status_json_one() {
   local name=$1
   local exists=false days='null' not_after='' issuer='' selfsigned=false reason
   if certs::exists "$name"; then
     exists=true
-    days=$(certs::days_left "$name" 2>/dev/null || printf 'null')
+    days=$(certs::days_left "$name" 2>/dev/null) || days='null'
     not_after=$(certs::not_after "$name" 2>/dev/null || printf '')
     issuer=$(certs::issuer "$name" 2>/dev/null || printf '')
     certs::is_selfsigned "$name" && selfsigned=true
@@ -312,7 +404,7 @@ certs::status_json_one() {
 
   printf '{"name":"%s","domains":[%s],"kind":"%s","provider":"%s","exists":%s,"days_left":%s,"not_after":"%s","issuer":"%s","self_signed":%s,"renewal_needed":%s,"renewal_reason":"%s"}' \
     "$(log::_json_escape "$name")" \
-    "$(printf '"%s",' ${NC_SPEC_DOMAINS[$name]} | sed 's/,$//')" \
+    "$(certs::_json_domains "$name")" \
     "${NC_SPEC_KIND[$name]}" \
     "${NC_SPEC_PROVIDER[$name]}" \
     "$exists" "${days:-null}" \

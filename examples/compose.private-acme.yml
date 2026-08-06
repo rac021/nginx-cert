@@ -10,9 +10,11 @@
 #      Mount your root certificate into the system trust store.
 #
 #   2. Internal names (*.internal, *.lan, single labels) are classified as
-#      non-public by nginx-cert and would normally go straight to the local
-#      self-signed authority. Pin the provider explicitly so the private CA is
-#      used instead.
+#      non-public and would normally go straight to the local self-signed
+#      authority -- no public CA can validate them. Setting CERT_ACME_SERVER
+#      *and* pinning CERT_PROVIDER tells nginx-cert the name is being sent to
+#      a private authority, which can sign it, so the classification is
+#      bypassed. Both are required: on "auto" the name still goes local.
 
 services:
   nginx-cert:
@@ -43,7 +45,15 @@ services:
       - nginx-cert-data:/data
       # Root certificate of the internal PKI, so the container trusts the ACME
       # server's own HTTPS endpoint.
-      - ./corp-root-ca.pem:/etc/ssl/certs/corp-root-ca.pem:ro
+      #
+      # It has to go into the bundle, not merely into the directory: OpenSSL
+      # and curl read /etc/ssl/certs/ca-certificates.crt, so dropping a file
+      # next to it changes nothing and the very first request fails on TLS
+      # verification. Appending is what update-ca-certificates would do.
+      - ./corp-root-ca.pem:/usr/local/share/ca-certificates/corp-root-ca.crt:ro
+    # Runs before nginx-cert as root, then the container drops back to nginx.
+    # Alternatively, bake the certificate into your own image with
+    # "RUN update-ca-certificates".
 
   app:
     image: traefik/whoami

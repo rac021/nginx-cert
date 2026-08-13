@@ -68,6 +68,9 @@ domain::_is_reserved_tld() {
 
 domain::_ipv4_is_private() {
   local ip=$1
+  # "a" and "b" declared: only IFS was, so read created them in the global
+  # scope and every classification left two stray variables behind.
+  local a b
   local IFS='.'; read -r a b _ _ <<<"$ip"
   a=$((10#$a)); b=$((10#$b))
   ((a == 10)) && return 0                          # 10.0.0.0/8

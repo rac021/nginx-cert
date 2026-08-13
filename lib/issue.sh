@@ -21,7 +21,7 @@
 # shellcheck shell=bash
 #
 # shellcheck disable=SC2034
-#   NC_LAST_PROVIDER is read by bin/certme (revoke command).
+#   NC_LAST_PROVIDER and NC_RESCUED are read by bin/certme.
 
 [[ -n ${NC_LIB_ISSUE_SH:-} ]] && return 0
 readonly NC_LIB_ISSUE_SH=1
@@ -29,6 +29,7 @@ readonly NC_LIB_ISSUE_SH=1
 declare -a NC_CHANGED=()   # certificates actually renewed
 declare -a NC_FAILED=()    # certificates no authority could deliver
 declare -a NC_SKIPPED=()   # certificates still valid
+declare -a NC_RESCUED=()   # a real authority refused, the local one took over
 declare -A NC_LAST_PROVIDER=()  # authority that actually issued each certificate
 
 # --- Post-failure backoff --------------------------------------------------
@@ -38,6 +39,20 @@ declare -A NC_LAST_PROVIDER=()  # authority that actually issued each certificat
 # most common way to get blocked by Let's Encrypt.
 
 issue::_failure_file() { printf '%s/failures/%s' "$CFG_STATE_DIR" "$1"; }
+
+# The exponential ceiling, in seconds, given what is actually serving.
+#
+# Twelve hours is the right answer while a trusted certificate is in place:
+# nothing is degraded and the authority's quota is the only thing at stake. It
+# is the wrong answer when the site is running on the local placeholder, where
+# every visitor already gets a full-page browser warning -- half a day of that
+# to spare requests an authority has not been asked for yet. Back off either
+# way, but never past the base delay in the degraded case.
+issue::_cooldown_ceiling() {
+  local base=$1 max=$2 degraded=$3
+  ((degraded)) && { printf '%s' "$base"; return; }
+  printf '%s' "$max"
+}
 
 issue::_record_failure() {
   local name=$1 file; file=$(issue::_failure_file "$name")
@@ -52,18 +67,19 @@ issue::_record_failure() {
 issue::_clear_failure() { rm -f "$(issue::_failure_file "$1")"; }
 
 # Remaining backoff in seconds, 0 when a retry is allowed.
+# usage: issue::_cooldown_remaining <name> [degraded:0|1]
 issue::_cooldown_remaining() {
-  local name=$1 file; file=$(issue::_failure_file "$name")
+  local name=$1 degraded=${2:-0} file; file=$(issue::_failure_file "$name")
   [[ -r $file ]] || { printf '0'; return; }
 
   local last count base max wait now
   read -r last count <"$file" 2>/dev/null || { printf '0'; return; }
   [[ $last =~ ^[0-9]+$ && $count =~ ^[0-9]+$ ]] || { printf '0'; return; }
 
-  base=$(util::parse_duration "${CERT_FAILURE_COOLDOWN:-30m}")
-  max=$(util::parse_duration "${CERT_FAILURE_COOLDOWN_MAX:-12h}")
+  base=${CFG_FAILURE_COOLDOWN_S:-1800}
+  max=$(issue::_cooldown_ceiling "$base" "${CFG_FAILURE_COOLDOWN_MAX_S:-43200}" "$degraded")
   ((base > 0)) || base=1800
-  ((max > 0)) || max=43200
+  ((max >= base)) || max=$base
 
   wait=$base
   local i=1
@@ -168,8 +184,18 @@ issue::one() {
   # An existing certificate protects the service, so we honour the backoff.
   # With no certificate at all we try immediately, falling back to self-signed
   # if needed.
+  #
+  # How long the backoff may grow depends on what that certificate is worth.
+  # issue::ensure_placeholders installs a local certificate for every declared
+  # name before this ever runs, so "a certificate exists" says nothing about
+  # the service being protected -- and a single failed attempt used to park a
+  # site on an untrusted certificate for up to twelve hours. The guard is the
+  # same one that keeps the local authority out of the chain below, so the two
+  # decisions cannot disagree about what counts as protected.
   if certs::exists "$name"; then
-    local cooldown; cooldown=$(issue::_cooldown_remaining "$name")
+    local degraded=1
+    certs::protects_service "$name" && degraded=0
+    local cooldown; cooldown=$(issue::_cooldown_remaining "$name" "$degraded")
     if ((cooldown > 0)); then
       log::warn "'${name}': recent failure, next attempt in $(util::human_duration "$cooldown") (quota protection)."
       NC_SKIPPED+=("$name")
@@ -241,6 +267,11 @@ issue::one() {
         if certs::install "$name" "$staging_dir"; then
           if [[ $provider == selfsigned ]] && ((acme_failed)); then
             issue::_record_failure "$name"
+            # Not a renewal: a rescue. Counted apart so the summary and the
+            # exit code stop describing "every authority refused, the local one
+            # signed instead" as a successful run -- which is what a monitoring
+            # system keyed on that exit code was being told.
+            NC_RESCUED+=("$name")
           else
             issue::_clear_failure "$name"
           fi
@@ -292,7 +323,7 @@ issue::one() {
 # made "certme issue one-site" delete every other site's server block.
 # Returns: 0 if anything changed, 2 if nothing did, 1 if anything failed.
 issue::all() {
-  NC_CHANGED=(); NC_FAILED=(); NC_SKIPPED=()
+  NC_CHANGED=(); NC_FAILED=(); NC_SKIPPED=(); NC_RESCUED=()
   local -a targets=("$@")
   ((${#targets[@]})) || targets=(${NC_SPEC_NAMES[@]+"${NC_SPEC_NAMES[@]}"})
   local name
@@ -300,8 +331,8 @@ issue::all() {
     issue::one "$name" || true
   done
 
-  ((${#NC_FAILED[@]}))  && return 1
-  ((${#NC_CHANGED[@]})) && return 0
+  ((${#NC_FAILED[@]} + ${#NC_RESCUED[@]})) && return 1
+  ((${#NC_CHANGED[@]}))                    && return 0
   return 2
 }
 
@@ -316,16 +347,21 @@ issue::_summarize() {
 issue::report() {
   log::section "Summary"
 
-  local c_changed=$C_DIM c_skipped=$C_DIM c_failed=$C_DIM
+  local c_changed=$C_DIM c_skipped=$C_DIM c_failed=$C_DIM c_rescued=$C_DIM
   ((${#NC_CHANGED[@]})) && c_changed=$C_GREEN
   ((${#NC_SKIPPED[@]})) && c_skipped=''
   ((${#NC_FAILED[@]}))  && c_failed=$C_RED
+  ((${#NC_RESCUED[@]})) && c_rescued=$C_ORANGE
 
   log::kv_hl 'Renewed'   "$(issue::_summarize NC_CHANGED)" "$c_changed"
   log::kv_hl 'Unchanged' "$(issue::_summarize NC_SKIPPED)" "$c_skipped"
+  log::kv_hl 'Untrusted' "$(issue::_summarize NC_RESCUED)" "$c_rescued"
   log::kv_hl 'Failed'    "$(issue::_summarize NC_FAILED)"  "$c_failed"
 
-  if ((${#NC_FAILED[@]})); then
+  if ((${#NC_RESCUED[@]})); then
+    log::detail warn "Untrusted: no authority in the chain delivered, so the local one signed instead. Those sites answer, and every browser warns."
+  fi
+  if ((${#NC_FAILED[@]} + ${#NC_RESCUED[@]})); then
     log::detail warn "Run with CERT_LOG_LEVEL=debug for the full exchange with each authority."
   fi
 }

@@ -179,7 +179,8 @@ Effective configuration
 --------------------------------------------------------------
   Certificate management     enabled
   Provider                   auto -> letsencrypt,zerossl,actalis,google -> selfsigned
-  Attempts per authority     2 (initial delay 15s, doubled each retry)
+  Attempts per authority     2 (initial delay 15s, doubled each retry, 5m ceiling per request)
+  Backoff after failure      30m, doubled up to 12h
   Self-signed fallback       true
   Staging environment        false
   Account e-mail             ops@example.com
@@ -227,6 +228,11 @@ api.example.com              valid         R11                        D-89      
 internal.lan                 local         nginx-cert local developme D-364     internal.lan
 ```
 
+States: `valid`, `renew due`, `local` (signed by this container, not publicly
+trusted), `EXPIRED`, `missing` (no file yet) and `unreadable` (a file is there
+but openssl cannot parse it). An expired certificate shows how long ago it
+lapsed — `-5d` — rather than a day count.
+
 `certme providers` — which authorities your credentials actually unlock:
 
 ```
@@ -236,7 +242,10 @@ letsencrypt            Let's Encrypt              no        fqdn,wildcard,ip  ye
 zerossl                ZeroSSL                    required  fqdn,wildcard     no -- EAB credentials missing
 actalis                Actalis                    required  fqdn              no -- EAB credentials missing
 google                 Google Trust Services      required  fqdn,wildcard     no -- EAB credentials missing
-sslcom                 SSL.com                    required  fqdn,wildcard     no -- EAB credentials missing
+harica                 HARICA                     required  fqdn,wildcard     no -- EAB credentials missing
+certum                 Certum                     required  fqdn              no -- EAB credentials missing
+sectigo                Sectigo                    required  fqdn,wildcard     no -- EAB credentials missing
+sslcom                 SSL.com                    no        fqdn,wildcard     yes
 selfsigned             Local authority            no        all               yes (last resort)
 zerossl-rest           ZeroSSL (REST API)         no        ip                no -- CERT_ZEROSSL_API_KEY unset
 ```
@@ -1031,8 +1040,14 @@ raised to 400 to force the decision:
 ── Summary ───────────────────────────────────────────────────────────
    Renewed                    1  app.test
    Unchanged                  0
+   Untrusted                  0
    Failed                     0
 ```
+
+`Untrusted` counts the certificates no authority in the chain would deliver and
+that the local authority signed instead. Those sites answer, and every browser
+warns — so the command exits `3`, like an outright failure: a run that ends
+there needs attention, and anything watching the exit code has to hear about it.
 
 | | before | after |
 |---|---|---|
@@ -1531,7 +1546,8 @@ docker exec <container> certme <command>
 | `version` | Versions of nginx-cert, nginx, acme.sh, openssl |
 
 Exit codes: `0` success · `1` failure · `2` configuration · `3` no authority
-could issue · `4` invalid nginx configuration · `5` another operation running.
+could issue (including a fall back to the local one) · `4` invalid nginx
+configuration · `5` another operation running.
 
 ---
 

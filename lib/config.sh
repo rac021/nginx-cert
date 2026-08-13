@@ -89,6 +89,7 @@ config::load() {
   CFG_STAGING=$(config::_default CERT_STAGING false)
   CFG_ACME_SERVER=$(util::trim "${CERT_ACME_SERVER:-}")
   CFG_ACME_ARGS=${CERT_ACME_ARGS:-}
+  CFG_ACME_TIMEOUT=$(config::_default CERT_ACME_TIMEOUT 5m)
 
   # --- Credentials --------------------------------------------------------
   CFG_EAB_KID=$(util::trim "${CERT_EAB_KID:-}")
@@ -107,6 +108,17 @@ config::load() {
   CFG_RENEW_INTERVAL=$(config::_default CERT_RENEW_INTERVAL 12h)
   CFG_RENEW_JITTER=$(config::_default CERT_RENEW_JITTER 30m)
   CFG_POST_HOOK=${CERT_POST_HOOK:-}
+  # These five used to be read straight from the environment where they are
+  # consumed, which this module's whole contract forbids -- and none of them
+  # was ever validated. CERT_RETRY_DELAY=30min stopped the container with a
+  # precise message while CERT_FAILURE_COOLDOWN=30min fell silently back to the
+  # default: the same typo, two opposite outcomes.
+  CFG_FAILURE_COOLDOWN=$(config::_default CERT_FAILURE_COOLDOWN 30m)
+  CFG_FAILURE_COOLDOWN_MAX=$(config::_default CERT_FAILURE_COOLDOWN_MAX 12h)
+
+  # --- ZeroSSL REST (IP-address certificates) -----------------------------
+  CFG_ZEROSSL_TIMEOUT=$(config::_default CERT_ZEROSSL_TIMEOUT 5m)
+  CFG_ZEROSSL_VALIDITY_DAYS=$(config::_default CERT_ZEROSSL_VALIDITY_DAYS 90)
 
   # --- Self-signed --------------------------------------------------------
   CFG_SELFSIGNED_CA=$(config::_default CERT_SELFSIGNED_CA true)
@@ -316,6 +328,27 @@ config::validate() {
   ((CFG_RENEW_INTERVAL_S >= 60)) || log::die "$EX_CONFIG" \
     "CERT_RENEW_INTERVAL must be at least 60s (got: ${CFG_RENEW_INTERVAL})."
 
+  CFG_ACME_TIMEOUT_S=$(util::parse_duration "$CFG_ACME_TIMEOUT") || log::die "$EX_CONFIG" \
+    "CERT_ACME_TIMEOUT='${CFG_ACME_TIMEOUT}' is invalid (examples: 5m, 90s, 300)."
+  ((CFG_ACME_TIMEOUT_S > 0)) || log::die "$EX_CONFIG" \
+    "CERT_ACME_TIMEOUT must be greater than zero (got: ${CFG_ACME_TIMEOUT})."
+
+  CFG_FAILURE_COOLDOWN_S=$(util::parse_duration "$CFG_FAILURE_COOLDOWN") || log::die "$EX_CONFIG" \
+    "CERT_FAILURE_COOLDOWN='${CFG_FAILURE_COOLDOWN}' is invalid (examples: 30m, 2h, 1800)."
+  ((CFG_FAILURE_COOLDOWN_S > 0)) || log::die "$EX_CONFIG" \
+    "CERT_FAILURE_COOLDOWN must be greater than zero (got: ${CFG_FAILURE_COOLDOWN})."
+  CFG_FAILURE_COOLDOWN_MAX_S=$(util::parse_duration "$CFG_FAILURE_COOLDOWN_MAX") || log::die "$EX_CONFIG" \
+    "CERT_FAILURE_COOLDOWN_MAX='${CFG_FAILURE_COOLDOWN_MAX}' is invalid (examples: 12h, 45m, 43200)."
+  ((CFG_FAILURE_COOLDOWN_MAX_S >= CFG_FAILURE_COOLDOWN_S)) || log::die "$EX_CONFIG" \
+    "CERT_FAILURE_COOLDOWN_MAX (${CFG_FAILURE_COOLDOWN_MAX}) must not be shorter than CERT_FAILURE_COOLDOWN (${CFG_FAILURE_COOLDOWN})."
+
+  CFG_ZEROSSL_TIMEOUT_S=$(util::parse_duration "$CFG_ZEROSSL_TIMEOUT") || log::die "$EX_CONFIG" \
+    "CERT_ZEROSSL_TIMEOUT='${CFG_ZEROSSL_TIMEOUT}' is invalid (examples: 5m, 90s, 300)."
+  ((CFG_ZEROSSL_TIMEOUT_S > 0)) || log::die "$EX_CONFIG" \
+    "CERT_ZEROSSL_TIMEOUT must be greater than zero (got: ${CFG_ZEROSSL_TIMEOUT})."
+  [[ $CFG_ZEROSSL_VALIDITY_DAYS =~ ^[1-9][0-9]*$ ]] || log::die "$EX_CONFIG" \
+    "CERT_ZEROSSL_VALIDITY_DAYS='${CFG_ZEROSSL_VALIDITY_DAYS}' must be a strictly positive integer."
+
   local p
   for p in CFG_HTTP_PORT CFG_HTTPS_PORT; do
     [[ ${!p} =~ ^[0-9]+$ ]] && ((${!p} >= 1 && ${!p} <= 65535)) || log::die "$EX_CONFIG" \
@@ -338,7 +371,13 @@ config::validate() {
          "CERT_KEY_TYPE='${CFG_KEY_TYPE}': expected ec-256, ec-384, ec-521, 2048, 3072 or 4096." ;;
   esac
 
-  if [[ $CFG_PROVIDER != auto ]]; then
+  # "selfsigned" is a pseudo-provider: it speaks no ACME, so it has no line in
+  # providers.tsv -- yet it is a documented value of CERT_PROVIDER, the
+  # migration target this program itself recommends when it meets
+  # CERT_SELF_SIGNED_CERTIFICATE, and the last link of every chain. The
+  # per-certificate check below already exempted it; this one did not, so the
+  # very value the error message lists as available stopped the container.
+  if [[ $CFG_PROVIDER != auto && $CFG_PROVIDER != selfsigned ]]; then
     provider::exists "$CFG_PROVIDER" || log::die "$EX_CONFIG" \
       "CERT_PROVIDER='${CFG_PROVIDER}' is unknown. Available: $(provider::list_ids | tr '\n' ' ')selfsigned"
   fi
@@ -449,7 +488,14 @@ config::summary() {
     log::kv_hl "Certificate management" 'disabled' "$C_ORANGE"
   fi
   log::kv_hl "Provider" "$CFG_PROVIDER$( [[ $CFG_PROVIDER == auto ]] && printf ' -> %s -> selfsigned' "$CFG_PROVIDER_CHAIN")"
-  log::kv "Attempts per authority" "$CFG_ATTEMPTS (initial delay $(util::human_duration "$CFG_RETRY_DELAY_S"), doubled each retry)"
+  # It replaces the directory URL of every authority named on the line above,
+  # so leaving it out described a run that was not going to happen: four
+  # authorities listed, none of them contacted.
+  if [[ -n $CFG_ACME_SERVER ]]; then
+    log::kv_hl "ACME directory" "$CFG_ACME_SERVER -- overrides the authorities above (CERT_ACME_SERVER)" "$C_ORANGE"
+  fi
+  log::kv "Attempts per authority" "$CFG_ATTEMPTS (initial delay $(util::human_duration "$CFG_RETRY_DELAY_S"), doubled each retry, $(util::human_duration "$CFG_ACME_TIMEOUT_S") ceiling per request)"
+  log::kv "Backoff after failure"  "$(util::human_duration "$CFG_FAILURE_COOLDOWN_S"), doubled up to $(util::human_duration "$CFG_FAILURE_COOLDOWN_MAX_S")"
   log::kv "Self-signed fallback"   "$CFG_FALLBACK_SELFSIGNED"
   # Staging is the single setting most likely to be forgotten: it yields
   # certificates no browser trusts, and everything else looks like success.

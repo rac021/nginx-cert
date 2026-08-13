@@ -408,10 +408,56 @@ else
   ok 'no emergency in the log with an unmanaged nginx.conf'
 fi
 
+# The TLS policy travels through the same conf.d bridge as the maps. It used to
+# be rendered to disk and included by nothing, so the generated servers ran on
+# nginx's compiled-in defaults: CERT_SSL_POLICY=modern still completed a TLS 1.2
+# handshake, and ssl_session_tickets / ssl_early_data were never turned off.
+if docker exec "$CONTAINER" openssl s_client -connect 127.0.0.1:443 -tls1_2 \
+     -servername unmanaged.test </dev/null 2>&1 | grep -q 'Protocol *: *TLSv1.2'; then
+  ok 'the default policy accepts TLS 1.2 with an unmanaged nginx.conf'
+else
+  ko 'the default policy accepts TLS 1.2 with an unmanaged nginx.conf'
+fi
+docker rm -f "${CONTAINER}-modern" >/dev/null 2>&1
+userconf=$(mktemp)
+cat >"$userconf" <<'CONF'
+worker_processes auto;
+events { worker_connections 1024; }
+http {
+    include       /etc/nginx/mime.types;
+    default_type  application/octet-stream;
+    include /etc/nginx/conf.d/*.conf;
+}
+CONF
+chmod 644 "$userconf"
+docker run -d --name "${CONTAINER}-modern" --network none \
+  -e CERT_EMAIL='a@b.co' -e CERT_DOMAINS='modern.test' \
+  -e CERT_MANAGE_NGINX=false -e CERT_SSL_POLICY=modern \
+  -v "${userconf}:/etc/nginx/nginx.conf:ro" "$IMAGE" >/dev/null
+for _ in $(seq 1 40); do
+  docker logs "${CONTAINER}-modern" 2>&1 | grep -q 'nginx-cert is up' && break
+  sleep 1
+done
+rm -f "$userconf"
+if docker exec "${CONTAINER}-modern" openssl s_client -connect 127.0.0.1:443 -tls1_2 \
+     -servername modern.test </dev/null 2>&1 | grep -q 'Protocol *: *TLSv1.2'; then
+  ko 'CERT_SSL_POLICY=modern refuses TLS 1.2 with an unmanaged nginx.conf' \
+     'the handshake succeeded, so the TLS policy snippet is not in effect'
+else
+  ok 'CERT_SSL_POLICY=modern refuses TLS 1.2 with an unmanaged nginx.conf'
+fi
+if docker exec "${CONTAINER}-modern" openssl s_client -connect 127.0.0.1:443 -tls1_3 \
+     -servername modern.test </dev/null 2>&1 | grep -q 'Protocol *: *TLSv1.3'; then
+  ok 'and still serves TLS 1.3'
+else
+  ko 'and still serves TLS 1.3'
+fi
+docker rm -f "${CONTAINER}-modern" >/dev/null 2>&1
+
 # -- Scenario 13: the per-certificate redirect= option is honoured -----------
 cleanup
 docker run -d --name "$CONTAINER" --network none -e CERT_EMAIL='a@b.co' \
-  -e CERT_DOMAINS=$'keep.test | upstream=app:8080\nplain.test | upstream=app:8080 redirect=false' \
+  -e CERT_DOMAINS=$'keep.test | upstream=app:8080\nplain.test | upstream=app:8080 redirect=false\n*.wild.test | upstream=app:8080 redirect=false' \
   "$IMAGE" >/dev/null
 for _ in $(seq 1 40); do
   docker logs "$CONTAINER" 2>&1 | grep -q 'nginx-cert is up' && break
@@ -423,6 +469,20 @@ check 'a certificate without the option still redirects to HTTPS' '308' "$code"
 code=$(docker exec "$CONTAINER" curl -s -o /dev/null -w '%{http_code}' \
   -H 'Host: plain.test' http://127.0.0.1/ 2>/dev/null)
 check 'redirect=false stops the redirect for that certificate only' '200' "$code"
+
+# A map key is matched literally unless the block declares "hostnames", so
+# "*.wild.test" only ever matched a Host header spelled exactly that way:
+# redirect=false silently did nothing for every wildcard certificate.
+code=$(docker exec "$CONTAINER" curl -s -o /dev/null -w '%{http_code}' \
+  -H 'Host: app.wild.test' http://127.0.0.1/ 2>/dev/null)
+check 'redirect=false covers the hosts a wildcard certificate matches' '200' "$code"
+code=$(docker exec "$CONTAINER" curl -s -o /dev/null -w '%{http_code}' \
+  -H 'Host: deep.sub.wild.test' http://127.0.0.1/ 2>/dev/null)
+check 'and does so at any depth under the wildcard' '200' "$code"
+# The opt-out must stay an opt-out: an unrelated host still gets the redirect.
+code=$(docker exec "$CONTAINER" curl -s -o /dev/null -w '%{http_code}' \
+  -H 'Host: elsewhere.example.com' http://127.0.0.1/ 2>/dev/null)
+check 'a host outside the opt-out list still redirects' '308' "$code"
 
 # -- Scenario 14: an invalid upstream is refused before nginx sees it --------
 out=$(docker run --rm -e CERT_DOMAINS='example.com' -e CERT_EMAIL='a@b.co' \
@@ -441,6 +501,120 @@ if [[ $out == *'certme'* ]]; then
   ok 'the error points at "certme renew"'
 else
   ko 'the error points at "certme renew"' "$out"
+fi
+
+# -- Scenario 16: CERT_PROVIDER=selfsigned is a supported configuration -------
+#
+# It has no line in providers.tsv because it speaks no ACME, so the existence
+# check rejected it -- while "certme providers" listed it, the README
+# documented it, and the removal notice for CERT_SELF_SIGNED_CERTIFICATE told
+# the operator to switch to exactly this. Following that advice stopped the
+# container with exit 2.
+cleanup
+docker run -d --name "$CONTAINER" --network none \
+  -e CERT_PROVIDER=selfsigned -e CERT_DOMAINS='pinned.example.com' "$IMAGE" >/dev/null
+for _ in $(seq 1 40); do
+  docker logs "$CONTAINER" 2>&1 | grep -q 'nginx-cert is up' && break
+  sleep 1
+done
+check 'CERT_PROVIDER=selfsigned starts the container' 'running' \
+  "$(docker inspect "$CONTAINER" --format '{{.State.Status}}')"
+# A public name pinned to the local authority must not reach out either.
+if docker logs "$CONTAINER" 2>&1 | grep -q "Let's Encrypt"; then
+  ko 'CERT_PROVIDER=selfsigned contacts no authority' \
+     "$(docker logs "$CONTAINER" 2>&1 | grep -m1 "Let's Encrypt")"
+else
+  ok 'CERT_PROVIDER=selfsigned contacts no authority'
+fi
+out=$(docker run --rm --network none -e CERT_PROVIDER=selfsignd \
+        -e CERT_DOMAINS='typo.example.com' "$IMAGE" 2>&1); rc=$?
+check 'a misspelt provider is still refused' '2' "$rc"
+
+# -- Scenario 17: a lock that cannot be taken is not a successful run ---------
+#
+# Only EX_BUSY was propagated, so an unopenable lock file -- a read-only
+# volume, a directory owned by someone else -- printed a summary of zeros and
+# exited 0. The scheduler's "certme issue || warn" never warned, and a
+# container that had stopped renewing altogether reported success.
+docker exec -u root "$CONTAINER" sh -c \
+  'rm -f /data/state/nginx-cert.lock && install -o root -g root -m 0600 /dev/null /data/state/nginx-cert.lock'
+out=$(docker exec "$CONTAINER" certme issue 2>&1); rc=$?
+check 'an unopenable lock file exits with code 2, not 0' '2' "$rc"
+if [[ $out == *'lock file'* ]]; then
+  ok 'the message names the lock file'
+else
+  ko 'the message names the lock file' "$out"
+fi
+docker exec -u root "$CONTAINER" rm -f /data/state/nginx-cert.lock
+
+# -- Scenario 18: a certificate on disk that cannot be parsed ----------------
+#
+# certs::days_left returns non-zero there, and a bare assignment under "set -e"
+# ended the command on the spot: the status table stopped at that row with no
+# message, and the health probe -- which the Docker HEALTHCHECK runs -- exited 1
+# with no output at all.
+cleanup
+docker run -d --name "$CONTAINER" --network none -e CERT_EMAIL='a@b.co' \
+  -e CERT_DOMAINS=$'first.test\nbroken.test\nlast.test' "$IMAGE" >/dev/null
+for _ in $(seq 1 40); do
+  docker logs "$CONTAINER" 2>&1 | grep -q 'nginx-cert is up' && break
+  sleep 1
+done
+docker exec "$CONTAINER" sh -c 'printf "garbage\n" > /data/certs/broken.test/fullchain.pem'
+status_out=$(docker exec "$CONTAINER" certme status 2>&1)
+if [[ $status_out == *'last.test'* ]]; then
+  ok 'certme status keeps listing the certificates after a broken one'
+else
+  ko 'certme status keeps listing the certificates after a broken one' "$status_out"
+fi
+if [[ $status_out == *'unreadable'* ]]; then
+  ok 'certme status names the broken certificate as unreadable'
+else
+  ko 'certme status names the broken certificate as unreadable' "$status_out"
+fi
+health_out=$(docker exec "$CONTAINER" certme health 2>&1); rc=$?
+check 'certme health fails on an unreadable certificate' '1' "$rc"
+if [[ $health_out == *'broken.test'* ]]; then
+  ok 'certme health says which certificate is unreadable'
+else
+  ko 'certme health says which certificate is unreadable' "(no output: '${health_out}')"
+fi
+
+# -- Scenario 19: a run rescued by the local authority is not a success -------
+#
+# Every authority refused and the local one signed instead: the summary said
+# "Renewed 1 / Failed 0" in green and the command exited 0, so anything keyed
+# on that exit code was told the renewal had worked.
+cleanup
+docker volume create "$VOLUME" >/dev/null
+out=$(docker run --rm --network none -v "${VOLUME}:/data" \
+  -e CERT_EMAIL='a@b.co' -e CERT_DOMAINS='rescued.example.com' \
+  -e CERT_ATTEMPTS=1 -e CERT_ACME_TIMEOUT=8s \
+  --entrypoint /opt/nginx-cert/bin/certme "$IMAGE" issue 2>&1); rc=$?
+check 'falling back to the local authority exits 3, not 0' '3' "$rc"
+if [[ $out == *'Untrusted'*'rescued.example.com'* ]]; then
+  ok 'the summary counts it as untrusted, not as renewed'
+else
+  ko 'the summary counts it as untrusted, not as renewed' "$out"
+fi
+# The certificate is still installed: the point is to keep the service up.
+if docker run --rm -v "${VOLUME}:/data" --entrypoint test "$IMAGE" \
+     -s /data/certs/rescued.example.com/fullchain.pem; then
+  ok 'the rescue certificate is still installed'
+else
+  ko 'the rescue certificate is still installed'
+fi
+
+# A local certificate has no issuing authority to revoke it with, and "auto"
+# used to be resolved to Let's Encrypt whatever had actually signed.
+out=$(docker run --rm --network none -v "${VOLUME}:/data" \
+  -e CERT_EMAIL='a@b.co' -e CERT_DOMAINS='rescued.example.com' \
+  --entrypoint /opt/nginx-cert/bin/certme "$IMAGE" revoke rescued.example.com 2>&1); rc=$?
+check 'revoking a local certificate is refused, not sent to a public CA' '2' "$rc"
+if [[ $out != *"Let's Encrypt"* ]]; then
+  ok 'and no authority is named that did not issue it'
+else
+  ko 'and no authority is named that did not issue it' "$out"
 fi
 
 # -- Result ------------------------------------------------------------------

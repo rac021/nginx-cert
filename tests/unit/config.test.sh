@@ -281,3 +281,78 @@ test_rejects_a_non_numeric_per_certificate_threshold() {
   assert_fails _load_config_fails CERT_EMAIL=a@b.com \
     "CERT_DOMAINS=example.com | renew_days=soon"
 }
+
+# --- selfsigned is a value of CERT_PROVIDER, not just of "provider=" --------
+#
+# It has no line in providers.tsv because it speaks no ACME, so the existence
+# check rejected it -- while the error message listed it as available, the
+# README documented it, and the removal notice for CERT_SELF_SIGNED_CERTIFICATE
+# told the operator to switch to it. Following that advice stopped the
+# container.
+test_accepts_selfsigned_as_the_global_provider() {
+  _load_config CERT_PROVIDER=selfsigned CERT_DOMAINS=example.com
+  assert_eq 'selfsigned' "$CFG_PROVIDER"
+  assert_eq 'selfsigned' "${NC_SPEC_PROVIDER[example.com]}"
+}
+
+# ...and it must not drag CERT_EMAIL in with it: the local authority asks for
+# no account.
+test_selfsigned_needs_no_account_email() {
+  assert_ok _load_config CERT_PROVIDER=selfsigned CERT_DOMAINS=example.com
+}
+
+test_still_rejects_a_misspelt_global_provider() {
+  assert_fails _load_config_fails CERT_EMAIL=a@b.com CERT_DOMAINS=example.com \
+    CERT_PROVIDER=selfsignd
+}
+
+# --- every duration is validated, wherever it is consumed ------------------
+#
+# These four were read straight from the environment at the point of use and
+# fell back to their default on anything the parser rejected. The same typo
+# that stopped the container on CERT_RETRY_DELAY was silently ignored here.
+test_rejects_invalid_durations_consumed_outside_config() {
+  local v
+  for v in CERT_ACME_TIMEOUT CERT_FAILURE_COOLDOWN CERT_FAILURE_COOLDOWN_MAX \
+           CERT_ZEROSSL_TIMEOUT; do
+    assert_fails _load_config_fails CERT_EMAIL=a@b.com CERT_DOMAINS=example.com \
+      "${v}=30min" "should reject ${v}=30min"
+  done
+}
+
+test_rejects_a_zero_acme_timeout() {
+  assert_fails _load_config_fails CERT_EMAIL=a@b.com CERT_DOMAINS=example.com \
+    CERT_ACME_TIMEOUT=0
+}
+
+# A ceiling below the base delay would make the backoff shrink with every
+# failure instead of growing.
+test_rejects_a_cooldown_ceiling_below_the_base_delay() {
+  assert_fails _load_config_fails CERT_EMAIL=a@b.com CERT_DOMAINS=example.com \
+    CERT_FAILURE_COOLDOWN=2h CERT_FAILURE_COOLDOWN_MAX=30m
+}
+
+test_rejects_a_non_numeric_zerossl_validity() {
+  assert_fails _load_config_fails CERT_EMAIL=a@b.com CERT_DOMAINS=example.com \
+    CERT_ZEROSSL_VALIDITY_DAYS=ninety
+}
+
+test_exposes_the_parsed_durations_in_seconds() {
+  _load_config CERT_EMAIL=a@b.com CERT_DOMAINS=example.com \
+    CERT_ACME_TIMEOUT=90s CERT_FAILURE_COOLDOWN=45m CERT_FAILURE_COOLDOWN_MAX=6h
+  assert_eq '90'    "$CFG_ACME_TIMEOUT_S"
+  assert_eq '2700'  "$CFG_FAILURE_COOLDOWN_S"
+  assert_eq '21600' "$CFG_FAILURE_COOLDOWN_MAX_S"
+}
+
+# CERT_ACME_SERVER replaces the directory URL of every authority in the chain,
+# so a summary that names the chain without naming the override describes a run
+# that will not happen.
+test_the_summary_names_the_acme_directory_override() {
+  local out
+  out=$( _load_config CERT_EMAIL=a@b.com CERT_DOMAINS=example.com \
+           CERT_ACME_SERVER=https://ca.internal/acme/directory >/dev/null 2>&1
+         NC_LOG_LEVEL=info config::summary 2>&1 )
+  assert_contains "$out" 'https://ca.internal/acme/directory'
+  assert_contains "$out" 'CERT_ACME_SERVER'
+}

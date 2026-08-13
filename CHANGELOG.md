@@ -140,6 +140,78 @@ against the built image before being fixed, and each one now has a test.
   `flock -w`, which BusyBox does not have, so asking to wait failed instantly
   with a usage error even when the lock was free.
 
+Second pass over the same tree, same method:
+
+- **`CERT_PROVIDER=selfsigned` stopped the container.** It speaks no ACME, so
+  it has no line in `providers.tsv`, and the global existence check rejected it
+  — while the error message listed it as available, the README documented it,
+  `certme providers` showed it, and the removal notice for
+  `CERT_SELF_SIGNED_CERTIFICATE` told the operator to switch to exactly that.
+  Following our own migration advice ended in exit 2. The per-line
+  `provider=selfsigned` always worked, which is why it went unnoticed.
+- **`redirect=false` did nothing for a wildcard certificate.** An nginx `map`
+  key is matched literally unless the block declares `hostnames`, so
+  `*.example.com` only ever matched a `Host` header spelled exactly that way.
+  Every host the wildcard actually serves kept being redirected.
+- **`certme issue` exited 0 when it never ran.** Only `EX_BUSY` was propagated
+  out of the lock, so an unopenable lock file — the read-only volume the
+  previous pass taught it to *diagnose* — printed a summary of zeros and
+  reported success. The scheduler's `certme issue || warn` never warned: a
+  container that had stopped renewing altogether looked healthy until the
+  certificate expired. `issue::all`'s "2 = nothing to renew" collides exactly
+  with `EX_CONFIG`, so the run's own status no longer travels through the lock.
+- **`CERT_SSL_POLICY` was inert with `CERT_MANAGE_NGINX=false`.** The TLS
+  policy snippet was rendered to disk and included by nothing, so the generated
+  servers ran on nginx's compiled-in defaults: `modern` still completed a TLS
+  1.2 handshake, and `ssl_session_tickets off` and `ssl_early_data off` were
+  never applied. It now travels through the same conf.d bridge as the maps.
+- **An unparsable certificate silenced the CLI.** `certs::days_left` returns
+  non-zero there, and a bare assignment under `set -e` ended the command on the
+  spot: `certme status` truncated its table at that row with no message, and
+  `certme health` — what the Docker `HEALTHCHECK` runs — exited 1 with no
+  output at all, so the container went unhealthy with an empty reason. Both now
+  name the certificate and carry on.
+- **The quota backoff parked degraded sites for half a day.** It was guarded on
+  "a certificate file exists", but `issue::ensure_placeholders` installs a local
+  certificate for every declared name before any of this runs — so the "no
+  certificate at all, try immediately" path was unreachable on the boot path. A
+  single failed attempt left a site on an untrusted certificate for up to twelve
+  hours. The exponential ceiling is now `CERT_FAILURE_COOLDOWN` rather than
+  `CERT_FAILURE_COOLDOWN_MAX` whenever nothing trusted is serving: still a
+  backoff, still restart-loop proof, but bounded by the base delay.
+- **A run rescued by the local authority was reported as a success.** Every
+  authority refused, the local one signed, and the summary said `Renewed 1 /
+  Failed 0` in green with exit 0 — so anything keyed on that exit code was told
+  the renewal had worked. Counted separately as `Untrusted` now, and the command
+  exits `3`.
+- **`util::split_into` expanded globs.** The unquoted expansion that does the
+  splitting is also a pathname expansion, so parsing
+  `CERT_DOMAINS='*.example.com'` from a directory holding `www.example.com`
+  replaced the wildcard with the file names. Same defect the previous pass fixed
+  in `certs::_json_domains`, on the main parsing path.
+- **`certme revoke` addressed the wrong authority.** Which one actually issued
+  is recorded on disk at install time and already drives the renewal decision;
+  revoke read an in-process variable that is empty in every fresh process, then
+  resolved `auto` to Let's Encrypt whatever had signed. A certificate from the
+  local authority is now refused outright rather than announced, and sent, to a
+  public CA with an empty `--server`.
+- **`certme config` hid `CERT_ACME_SERVER`.** It replaces the directory URL of
+  every authority in the chain, so a summary naming four authorities that would
+  never be contacted described a run that was not going to happen.
+- **Durations were validated in some places and not others.**
+  `CERT_ACME_TIMEOUT`, `CERT_FAILURE_COOLDOWN`, `CERT_FAILURE_COOLDOWN_MAX`,
+  `CERT_ZEROSSL_TIMEOUT` and `CERT_ZEROSSL_VALIDITY_DAYS` were read straight
+  from the environment where they are consumed — which `lib/config.sh`'s own
+  contract forbids — and fell silently back to their default on anything the
+  parser rejected. `CERT_RETRY_DELAY=30min` stopped the container with a precise
+  message; `CERT_FAILURE_COOLDOWN=30min` was ignored. All five go through
+  `config::load` now, and a ceiling shorter than its base delay is refused.
+- An expired certificate displayed `D--5`. It shows `-5d` — five days past
+  expiry — and a certificate present but unparsable has its own `unreadable`
+  state instead of ending the listing.
+- `domain::_ipv4_is_private` declared only `IFS` local, so every name
+  classification left two stray variables in the global scope.
+
 ### Added
 
 - `renew_days=` per certificate. The renewal threshold only means something

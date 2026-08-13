@@ -36,13 +36,13 @@ zerossl_rest::issue() {
   util::require_cmds curl jq openssl
 
   local key_type=${NC_SPEC_KEY_TYPE[$name]:-$CFG_KEY_TYPE}
-  local validity=${CERT_ZEROSSL_VALIDITY_DAYS:-90}
-  local timeout; timeout=$(util::parse_duration "${CERT_ZEROSSL_TIMEOUT:-5m}")
-  # The two other places that parse a duration at the point of use fall back to
-  # their default on a value the parser rejects. Without it, an unparsable
-  # CERT_ZEROSSL_TIMEOUT became a zero budget: the order was placed and
-  # abandoned in the same breath, reported as "did not issue in time".
-  ((timeout > 0)) || timeout=300
+  # Both parsed and validated by config::load, with the same treatment every
+  # other duration and count gets: a value the parser rejects now stops the
+  # container with a message naming the variable, rather than becoming a zero
+  # budget here -- the order placed and abandoned in the same breath, reported
+  # as "did not issue in time".
+  local validity=${CFG_ZEROSSL_VALIDITY_DAYS:-90}
+  local timeout=${CFG_ZEROSSL_TIMEOUT_S:-300}
 
   mkdir -p "$outdir"
   local key="${outdir}/privkey.pem"

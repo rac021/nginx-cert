@@ -51,6 +51,35 @@ test_splits_and_joins() {
   assert_eq 'a|b|c' "$(util::join '|' "${parts[@]}")"
 }
 
+# The unquoted expansion that does the splitting is also a pathname expansion.
+# This is the CERT_DOMAINS parsing path: run from a directory that happens to
+# hold a matching file, a wildcard certificate silently became a certificate
+# for whatever was lying around.
+test_does_not_expand_wildcards_against_the_working_directory() {
+  local dir="${TEST_TMPDIR}/glob"
+  mkdir -p "$dir"
+  : >"${dir}/www.example.com"
+  : >"${dir}/api.example.com"
+
+  local -a parts=()
+  ( cd "$dir" && util::split_into parts ',' '*.example.com, other.org'
+    printf '%s\n' "${#parts[@]}" "${parts[0]}" ) >"${dir}/out"
+
+  assert_eq '2'              "$(sed -n 1p "${dir}/out")"
+  assert_eq '*.example.com'  "$(sed -n 2p "${dir}/out")"
+}
+
+# ...and it must leave the shell exactly as it found it: a lingering "set -f"
+# would silently disable globbing for everything that runs afterwards.
+test_restores_the_globbing_setting_it_found() {
+  local -a parts=()
+  set +f; util::split_into parts ',' 'a,b'
+  assert_not_contains "$-" 'f' 'globbing must be back on'
+  set -f; util::split_into parts ',' 'a,b'
+  assert_contains "$-" 'f' 'a caller that had disabled globbing keeps it off'
+  set +f
+}
+
 test_trims_surrounding_whitespace() {
   assert_eq 'abc' "$(util::trim '   abc   ')"
   assert_eq ''    "$(util::trim '     ')"

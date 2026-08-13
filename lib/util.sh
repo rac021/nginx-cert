@@ -53,15 +53,25 @@ util::join() {
 
 # Split a string on a separator into the named array.
 # usage: util::split_into <array_name> <separator> <string>
+# Globbing is disabled for the duration of the split. The unquoted expansion
+# that does the splitting is also a pathname expansion, so parsing
+# CERT_DOMAINS='*.example.com' from a directory that happens to contain
+# www.example.com replaced the wildcard with the file names -- a certificate
+# quietly requested for whatever was lying around.
 util::split_into() {
   local -n _arr=$1
   local sep=$2 str=$3
   _arr=()
+  local had_noglob=0
+  [[ $- == *f* ]] && had_noglob=1
+  set -f
   local IFS="$sep" part
   for part in $str; do
     part=$(util::trim "$part")
     [[ -n $part ]] && _arr+=("$part")
   done
+  ((had_noglob)) || set +f
+  return 0
 }
 
 # Convert a human-readable duration to seconds: 90, 45s, 30m, 12h, 7d, 1h30m.

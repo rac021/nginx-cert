@@ -80,9 +80,15 @@ cmd::apply_changes() {
 # --- Commands --------------------------------------------------------------
 
 # Everything that must not run concurrently with another certme process.
+#
+# Its own status is deliberately discarded: the outcome of the run is read from
+# NC_CHANGED / NC_RESCUED / NC_FAILED just below. Returning it through
+# lock::with would make it indistinguishable from a lock that could not be
+# taken -- and issue::all's "2 = nothing to renew" collides exactly with
+# EX_CONFIG, so a read-only /data was reported as a successful run.
 cmd::_issue_locked() {
   bootstrap::cleanup_staging
-  issue::all "$@"
+  issue::all "$@" || true
 }
 
 cmd::issue() {
@@ -114,16 +120,25 @@ cmd::issue() {
 
   # Staging directories belong to whoever holds the lock: cleaning them up
   # before taking it deleted the directory a concurrent run was writing into.
-  local rc=0
-  lock::with "$CFG_LOCK_FILE" 0 cmd::_issue_locked ${targets[@]+"${targets[@]}"} || rc=$?
-  ((rc == EX_BUSY)) && return "$EX_BUSY"
+  #
+  # Since cmd::_issue_locked always succeeds, anything non-zero here comes from
+  # the lock itself and means nothing ran at all. Only EX_BUSY used to be
+  # propagated, so an unopenable lock file -- a read-only volume, a directory
+  # owned by someone else -- printed a summary of zeros and exited 0: the
+  # scheduler's "certme issue || warn" never warned, and a container that had
+  # stopped renewing altogether reported success until the certificate expired.
+  local lock_rc=0
+  lock::with "$CFG_LOCK_FILE" 0 cmd::_issue_locked ${targets[@]+"${targets[@]}"} || lock_rc=$?
+  ((lock_rc)) && return "$lock_rc"
 
   local apply_rc=0
   cmd::apply_changes || apply_rc=$?
   issue::report
 
   ((apply_rc != 0)) && return "$apply_rc"
-  ((${#NC_FAILED[@]})) && return "$EX_ISSUE"
+  # A certificate the local authority had to rescue is not a success: the site
+  # is up, and every browser warns.
+  ((${#NC_FAILED[@]} + ${#NC_RESCUED[@]})) && return "$EX_ISSUE"
   return 0
 }
 
@@ -159,7 +174,16 @@ cmd::status() {
       printf "$fmt" "$name" "${C_RED}${padded}${C_RESET}" '-' '-' "${NC_SPEC_DOMAINS[$name]}"
       continue
     fi
-    days=$(certs::days_left "$name")
+    # A file that exists but cannot be parsed is its own state, not an excuse
+    # to stop. certs::days_left returns non-zero there, and a bare assignment
+    # under "set -e" ended the command on the spot: the table was truncated at
+    # that row with no message and exit 1, hiding both the broken certificate
+    # and every one after it.
+    if ! days=$(certs::days_left "$name"); then
+      printf -v padded '%-13s' 'unreadable'
+      printf "$fmt" "$name" "${C_RED}${padded}${C_RESET}" '-' '-' "${NC_SPEC_DOMAINS[$name]}"
+      continue
+    fi
     issuer=$(certs::issuer "$name" | sed -n 's/.*CN *= *\([^,/]*\).*/\1/p'); issuer=${issuer:-unknown}
     reason=$(certs::renewal_reason "$name")
 
@@ -169,8 +193,11 @@ cmd::status() {
     else                                    state='valid';        color=$C_GREEN
     fi
 
+    # "D-5" means five days left; "-5d" means five days past expiry. "D--5"
+    # said neither.
+    local expiry="D-${days}"; ((days < 0)) && expiry="${days}d"
     printf -v padded '%-13s' "$state"
-    printf "$fmt" "$name" "${color}${padded}${C_RESET}" "${issuer:0:26}" "D-${days}" "${NC_SPEC_DOMAINS[$name]}"
+    printf "$fmt" "$name" "${color}${padded}${C_RESET}" "${issuer:0:26}" "$expiry" "${NC_SPEC_DOMAINS[$name]}"
   done
 
   # A legend only where it earns its place: when something is not simply fine.
@@ -237,8 +264,26 @@ cmd::revoke() {
   local name=${1:-}
   [[ -z $name ]] && log::die "$EX_CONFIG" "Usage: certme revoke <name>. See 'certme list'."
   [[ -z ${NC_SPEC_DOMAINS[$name]:-} ]] && log::die "$EX_CONFIG" "Unknown certificate: '${name}'."
-  local provider=${NC_LAST_PROVIDER[$name]:-${NC_SPEC_PROVIDER[$name]}}
-  [[ $provider == auto ]] && provider=letsencrypt
+
+  # Which authority actually issued is recorded on disk at install time and
+  # survives restarts. NC_LAST_PROVIDER only holds a value inside the process
+  # that just issued, and "certme revoke" is always a fresh one -- so the
+  # fallback below always fired, and "auto" was resolved to letsencrypt: the
+  # revocation of a ZeroSSL certificate was announced, and sent, to the wrong
+  # authority.
+  local provider
+  provider=$(certs::recorded_provider "$name" 2>/dev/null) \
+    || provider=${NC_LAST_PROVIDER[$name]:-${NC_SPEC_PROVIDER[$name]}}
+
+  if [[ $provider == selfsigned ]]; then
+    log::die "$EX_CONFIG" \
+      "'${name}' was issued by the local authority: there is nothing to revoke. Delete $(config::cert_path "$name") and reissue instead."
+  fi
+  if [[ -z $provider || $provider == auto ]]; then
+    log::die "$EX_CONFIG" \
+      "Cannot tell which authority issued '${name}' (nothing recorded in ${CFG_STATE_DIR}/issued-by/). Revoke it by hand: acme.sh --revoke -d <domain> --server <directory>."
+  fi
+
   log::warn "Revoking '${name}' with $(provider::label "$provider")…"
   acme::revoke "$name" "$provider"
 }
@@ -251,12 +296,19 @@ cmd::health() {
   if ! curl -fsS --max-time 3 -o /dev/null "http://127.0.0.1:${CFG_HTTP_PORT}/healthz" 2>/dev/null; then
     printf 'nginx is not answering on /healthz (port %s)\n' "$CFG_HTTP_PORT" >&2; return 1
   fi
-  local name days expired=()
+  local name days expired=() unreadable=()
   for name in ${NC_SPEC_NAMES[@]+"${NC_SPEC_NAMES[@]}"}; do
     certs::exists "$name" || continue
-    days=$(certs::days_left "$name")
+    # An unparsable certificate is a failure that has to name itself. The bare
+    # assignment ended this function through "set -e", so the probe exited 1
+    # with no output at all: the container went unhealthy and "docker inspect"
+    # showed an empty reason.
+    if ! days=$(certs::days_left "$name"); then unreadable+=("$name"); continue; fi
     ((days < 0)) && expired+=("$name")
   done
+  if ((${#unreadable[@]})); then
+    printf 'unreadable certificate(s): %s\n' "${unreadable[*]}" >&2; return 1
+  fi
   if ((${#expired[@]})); then
     printf 'expired certificate(s): %s\n' "${expired[*]}" >&2; return 1
   fi

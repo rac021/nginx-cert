@@ -147,8 +147,10 @@ acme::issue() {
   # unreachable, acme.sh retries internally for several minutes. Without it, a
   # single broken authority would stall the whole fallback chain and delay
   # service startup by just as long.
-  local timeout_s; timeout_s=$(util::parse_duration "${CERT_ACME_TIMEOUT:-5m}")
-  ((timeout_s > 0)) || timeout_s=300
+  # Parsed and validated once by config::load, like every other duration: an
+  # unparsable value is now a startup error instead of a silent fall back to
+  # five minutes.
+  local timeout_s=${CFG_ACME_TIMEOUT_S:-300}
 
   local out rc=0
   out=$(timeout "$timeout_s" "${cmd[@]}" 2>&1) || rc=$?

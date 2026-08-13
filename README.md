@@ -354,7 +354,7 @@ text. Unbalanced quotes stop the container instead of being silently mangled.
 | `profile`   | Certificate profile (e.g. Let's Encrypt `shortlived`)       |
 | `staging`   | `true` to use this authority's staging environment          |
 | `hsts`      | HSTS header value, or `off`                                 |
-| `redirect`  | `false` to disable the HTTP → HTTPS redirect for this certificate |
+| `redirect`  | `true`/`false` for this certificate, whichever way `CERT_HTTP_REDIRECT` points |
 | `renew_days`| Renewal threshold for this certificate, overriding `CERT_RENEW_DAYS` |
 
 Each line becomes one lineage under `/data/certs/<name>/` and one generated

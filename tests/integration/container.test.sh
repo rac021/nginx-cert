@@ -484,6 +484,28 @@ code=$(docker exec "$CONTAINER" curl -s -o /dev/null -w '%{http_code}' \
   -H 'Host: elsewhere.example.com' http://127.0.0.1/ 2>/dev/null)
 check 'a host outside the opt-out list still redirects' '308' "$code"
 
+# -- Scenario 13b: the option works in the other direction too ---------------
+#
+# Only the opt-out was ever written into the map, so with CERT_HTTP_REDIRECT
+# off the default was empty and a per-certificate redirect=true had nothing to
+# turn it back on: a site that asked for the redirect silently did not get it.
+cleanup
+docker run -d --name "$CONTAINER" --network none -e CERT_EMAIL='a@b.co' \
+  -e CERT_HTTP_REDIRECT=false \
+  -e CERT_DOMAINS=$'plain.test | upstream=app:8080\nsecure.test | upstream=app:8080 redirect=true' \
+  "$IMAGE" >/dev/null
+for _ in $(seq 1 40); do
+  docker logs "$CONTAINER" 2>&1 | grep -q 'nginx-cert is up' && break
+  sleep 1
+done
+code=$(docker exec "$CONTAINER" curl -s -o /dev/null -w '%{http_code}' \
+  -H 'Host: plain.test' http://127.0.0.1/ 2>/dev/null)
+check 'CERT_HTTP_REDIRECT=false serves plain HTTP by default' '200' "$code"
+target=$(docker exec "$CONTAINER" curl -s -o /dev/null -w '%{http_code} %{redirect_url}' \
+  -H 'Host: secure.test' http://127.0.0.1/ 2>/dev/null)
+check 'redirect=true turns the redirect back on for that certificate' \
+  '308 https://secure.test/' "$target"
+
 # -- Scenario 14: an invalid upstream is refused before nginx sees it --------
 out=$(docker run --rm -e CERT_DOMAINS='example.com' -e CERT_EMAIL='a@b.co' \
         -e CERT_UPSTREAM='app:8080"; return 444; #' "$IMAGE" 2>&1); rc=$?

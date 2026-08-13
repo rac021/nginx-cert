@@ -12,14 +12,15 @@ map $http_upgrade $connection_upgrade {
     ""      close;
 }
 
-# Where a plain-HTTP request for each host should be redirected, empty for the
-# hosts that opted out with "redirect=false". The per-certificate option used
-# to be parsed, stored, and then read by nothing at all.
+# Where a plain-HTTP request for each host should be redirected, empty for a
+# host that must be served over plain HTTP. The default is CERT_HTTP_REDIRECT;
+# the lines under it are the certificates whose "redirect=" disagrees with it,
+# in either direction.
 map $host $nc_redirect_target {
     # Without "hostnames" a map key is matched literally, so the "*.example.com"
     # of a wildcard certificate matched a Host header spelled exactly that way
-    # and nothing else: redirect=false silently did nothing for every wildcard.
+    # and nothing else: redirect= silently did nothing for every wildcard.
     hostnames;
     default   "%%DEFAULT_TARGET%%";
-%%NO_REDIRECT_HOSTS%%
+%%REDIRECT_OVERRIDES%%
 }

@@ -107,27 +107,44 @@ nginx::_render_tls_policy() {
 # belongs. Without this, a generated server block referenced
 # $connection_upgrade and nginx refused to start.
 nginx::_render_http_extras() {
-  local default_target='https://$host$request_uri'
-  [[ $CFG_HTTPS_PORT != 443 ]] && default_target='https://$host:'"${CFG_HTTPS_PORT}"'$request_uri'
+  # Where a plain-HTTP request goes when it goes anywhere at all.
+  local target='https://$host$request_uri'
+  [[ $CFG_HTTPS_PORT != 443 ]] && target='https://$host:'"${CFG_HTTPS_PORT}"'$request_uri'
+
+  local default_target=$target
   util::is_true "$CFG_HTTP_REDIRECT" || default_target=''
 
-  # Hosts that opted out per certificate. nginx matches server names here, so
-  # one line per name, not per lineage.
-  local opted_out='' name d
+  # One entry per server name whose own setting disagrees with the global
+  # default, in either direction. nginx matches server names here, so one line
+  # per name, not per lineage.
+  #
+  # Only the opt-out direction used to be emitted, which made the option
+  # one-way: with CERT_HTTP_REDIRECT=false the map default was empty and a
+  # per-certificate redirect=true had nothing to turn it back on, so a site
+  # that asked for the redirect silently did not get it. Writing the difference
+  # rather than one fixed direction also keeps the map to the lines that
+  # actually say something.
+  local overrides='' name d host_target
   for name in ${NC_SPEC_NAMES[@]+"${NC_SPEC_NAMES[@]}"}; do
-    util::is_true "${NC_SPEC_REDIRECT[$name]:-true}" && continue
+    if util::is_true "${NC_SPEC_REDIRECT[$name]:-true}"; then
+      host_target=$target
+    else
+      host_target=''
+    fi
+    [[ $host_target == "$default_target" ]] && continue
     local -a doms=(); read -r -a doms <<<"${NC_SPEC_DOMAINS[$name]}"
     for d in ${doms[@]+"${doms[@]}"}; do
-      # A wildcard server name is written "*.example.com" in a map key too.
-      opted_out+="    \"${d}\"   \"\";"$'\n'
+      # A wildcard server name is written "*.example.com" in a map key too; the
+      # "hostnames" parameter in the template is what makes it match.
+      overrides+="    \"${d}\"   \"${host_target}\";"$'\n'
     done
   done
-  opted_out=${opted_out%$'\n'}
+  overrides=${overrides%$'\n'}
 
   template::render_to "${NC_ROOT}/templates/http-extras.conf.tpl" \
     "${NC_NGINX_SNIPPETS}/nginx-cert-http.conf" \
     "DEFAULT_TARGET=$default_target" \
-    "NO_REDIRECT_HOSTS=$opted_out" || return 1
+    "REDIRECT_OVERRIDES=$overrides" || return 1
   template::assert_complete "${NC_NGINX_SNIPPETS}/nginx-cert-http.conf" || return 1
 
   local bridge="${NC_NGINX_CONFD}/${NC_GENERATED_PREFIX}00-http.conf"

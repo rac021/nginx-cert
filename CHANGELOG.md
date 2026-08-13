@@ -4,6 +4,18 @@ All notable changes to this project are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+
+- **`redirect=` worked in one direction only.** The map that decides where a
+  plain-HTTP request goes was built by listing the certificates that had opted
+  *out*, so with `CERT_HTTP_REDIRECT=false` the default was empty and a
+  per-certificate `redirect=true` had nothing to turn back on: a site that
+  asked for the redirect silently did not get it. The map now carries an entry
+  for every certificate whose setting disagrees with the global default, in
+  either direction -- which also keeps it to the lines that say something.
+
 ## [2.2.0] - 2026-08-13
 
 Findings of a full audit of the 2.0.1 tree. Every item below was reproduced

@@ -194,12 +194,51 @@ config::warn_unknown_vars() {
 #   *.example.org                | dns=dns_cf
 #   192.0.2.10
 #
+# An option value may be quoted, which is the only way to give one a space:
+#
+#   example.com | hsts="max-age=63072000; includeSubDomains"
+#
+
+# Turn the ";" separator into a newline, except inside quotes.
+#
+# ";" separates certificates and also separates HSTS directives, so
+# hsts="max-age=63072000; includeSubDomains" -- the spelling RFC 6797 uses and
+# the one every guide shows -- was cut in half and its remainder parsed as a
+# second certificate. Splitting on the quoted form is the only place the two
+# meanings can be told apart.
+config::_split_specs() {
+  local raw=$1 out='' quote='' c i
+  for ((i = 0; i < ${#raw}; i++)); do
+    c=${raw:i:1}
+    if [[ -n $quote ]]; then
+      [[ $c == "$quote" ]] && quote=''
+      out+=$c
+      continue
+    fi
+    case $c in
+      \"|\') quote=$c; out+=$c ;;
+      ';')   out+=$'\n' ;;
+      *)     out+=$c ;;
+    esac
+  done
+  printf '%s' "$out"
+}
+
 config::_parse_domains() {
+  # Every array, not just the list of names. Only NC_SPEC_NAMES was cleared, so
+  # the per-certificate maps kept their previous contents and a second
+  # config::load in the same process died on its own leftovers with
+  # "two certificates share the same name" -- a configuration problem the
+  # operator does not have. No shipped path loads twice today, which is exactly
+  # what makes it a trap for the next one that does.
   NC_SPEC_NAMES=()
+  NC_SPEC_DOMAINS=(); NC_SPEC_KIND=(); NC_SPEC_PROVIDER=(); NC_SPEC_UPSTREAM=()
+  NC_SPEC_CHALLENGE=(); NC_SPEC_DNS=(); NC_SPEC_KEY_TYPE=(); NC_SPEC_PROFILE=()
+  NC_SPEC_STAGING=(); NC_SPEC_HSTS=(); NC_SPEC_REDIRECT=(); NC_SPEC_RENEW_DAYS=()
   local raw=${CERT_DOMAINS:-}
   [[ -z $(util::trim "$raw") ]] && return 0
 
-  raw=${raw//;/$'\n'}
+  raw=$(config::_split_specs "$raw")
 
   local line
   while IFS= read -r line; do
@@ -227,7 +266,15 @@ config::_parse_one_spec() {
 
   local -A opt=()
   local -a tokens=()
-  read -r -a tokens <<<"$opts_part"
+  # Command-line quoting rules rather than "split on whitespace and nothing
+  # else", so a value can carry a space at all -- the same treatment
+  # CERT_ACME_ARGS already gets, and for the same reason: the values that need
+  # it most are the ones nobody thought to allow it for. Quoting only, never
+  # evaluation: a $(...) in a value stays text.
+  if ! util::split_args tokens "$opts_part"; then
+    log::die "$EX_CONFIG" \
+      "CERT_DOMAINS: unbalanced quotes in the options of '${spec}'. Quotes must close, as on a command line."
+  fi
   local tok key val known k
   for tok in ${tokens[@]+"${tokens[@]}"}; do
     [[ $tok == *=* ]] || log::die "$EX_CONFIG" \
@@ -293,6 +340,16 @@ config::valid_upstream() {
   [[ $host =~ ^\[[0-9A-Fa-f:.]+\]$ || $host =~ ^[A-Za-z0-9]([A-Za-z0-9._-]*[A-Za-z0-9])?$ ]] || return 1
   [[ -z $port ]] && return 0
   [[ $port =~ ^[1-9][0-9]{0,4}$ ]] && ((port >= 1 && port <= 65535))
+}
+
+# A value emitted inside a quoted nginx directive.
+#
+# A double quote closes the generated string early and everything after it
+# becomes configuration -- the hole config::valid_upstream was added to close,
+# and now reachable through a quoted per-line option too.
+config::valid_header_value() {
+  local v=${1:-}
+  [[ $v != *'"'* && $v != *'\'* && $v != *$'\n'* && $v != *$'\r'* ]]
 }
 
 # --- Validation ------------------------------------------------------------
@@ -382,8 +439,39 @@ config::validate() {
       "CERT_PROVIDER='${CFG_PROVIDER}' is unknown. Available: $(provider::list_ids | tr '\n' ' ')selfsigned"
   fi
 
+  # CERT_PROVIDER_CHAIN, checked here rather than discovered mid-run.
+  #
+  # An unknown entry used to surface only as a warning from
+  # provider::chain_for -- once per certificate, long after startup, while the
+  # same typo in CERT_PROVIDER stopped the container outright.
+  #
+  # Deliberately not fatal per entry: retired authorities are removed from
+  # providers.tsv rather than left to time out on every run (Buypass went that
+  # way), so pulling a newer image must not refuse to start over a name that has
+  # simply gone. A chain with nothing usable left in it is fatal, because it
+  # silently reduces every certificate to the local authority.
+  local -a chain_ids=() chain_known=() chain_unknown=()
+  util::split_into chain_ids ',' "$CFG_PROVIDER_CHAIN"
+  local cid
+  for cid in ${chain_ids[@]+"${chain_ids[@]}"}; do
+    [[ $cid == selfsigned ]] && log::die "$EX_CONFIG" \
+      "CERT_PROVIDER_CHAIN must not list 'selfsigned': it already closes every chain. Remove it with CERT_FALLBACK_SELFSIGNED=false, or use CERT_PROVIDER=selfsigned to issue locally and nothing else."
+    if provider::exists "$cid"; then chain_known+=("$cid"); else chain_unknown+=("$cid"); fi
+  done
+  if ((${#chain_unknown[@]})); then
+    log::warn "CERT_PROVIDER_CHAIN: unknown authority(ies), ignored: ${chain_unknown[*]}"
+    log::detail warn "Known: $(provider::list_ids | tr '\n' ' ')-- 'certme providers' shows which ones your credentials unlock."
+  fi
+  if [[ $CFG_PROVIDER == auto ]] && ((${#chain_known[@]} == 0)); then
+    log::die "$EX_CONFIG" \
+      "CERT_PROVIDER_CHAIN='${CFG_PROVIDER_CHAIN}' names no known authority, so every certificate would be signed locally without a word. Known: $(provider::list_ids | tr '\n' ' ')"
+  fi
+
   config::valid_upstream "$CFG_UPSTREAM" || log::die "$EX_CONFIG" \
     "CERT_UPSTREAM='${CFG_UPSTREAM}' is not a valid host, host:port or scheme://host:port."
+
+  config::valid_header_value "$CFG_HSTS" || log::die "$EX_CONFIG" \
+    "CERT_HSTS='${CFG_HSTS}' must not contain a double quote or a backslash: it is emitted inside a quoted nginx directive."
 
   # Per-certificate consistency.
   #
@@ -405,6 +493,9 @@ config::validate() {
 
     util::assert_bool "CERT_DOMAINS staging= ('${name}')" "${NC_SPEC_STAGING[$name]}"
     util::assert_bool "CERT_DOMAINS redirect= ('${name}')" "${NC_SPEC_REDIRECT[$name]}"
+
+    config::valid_header_value "${NC_SPEC_HSTS[$name]}" || log::die "$EX_CONFIG" \
+      "CERT_DOMAINS: hsts='${NC_SPEC_HSTS[$name]}' ('${name}') must not contain a double quote or a backslash: it is emitted inside a quoted nginx directive."
 
     if [[ ${NC_SPEC_PROVIDER[$name]} != auto && ${NC_SPEC_PROVIDER[$name]} != selfsigned ]]; then
       provider::exists "${NC_SPEC_PROVIDER[$name]}" || log::die "$EX_CONFIG" \

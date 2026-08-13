@@ -330,7 +330,18 @@ CERT_DOMAINS: |
   203.0.113.10
 ```
 
-Options after `|` apply to that certificate only and override the global value:
+Options after `|` apply to that certificate only and override the global value.
+A value may be quoted, which is the only way to give one a space or a `;` —
+`;` otherwise separates certificates:
+
+```yaml
+CERT_DOMAINS: |
+  example.com | hsts="max-age=63072000; includeSubDomains"
+```
+
+Quoting rules only, never evaluation: a `$(...)` in a value reaches nginx as
+text. Unbalanced quotes stop the container instead of being silently mangled.
+
 
 | Option      | Meaning                                                     |
 |-------------|-------------------------------------------------------------|
@@ -425,7 +436,7 @@ server blocks in `/etc/nginx/conf.d/`, or `CERT_MANAGE_NGINX=false` to own
 | Variable | Default | Description |
 |---|---|---|
 | `CERT_PROVIDER` | `auto` | `auto`, or one of `letsencrypt`, `zerossl`, `actalis`, `google`, `harica`, `certum`, `sectigo`, `sslcom`, `selfsigned`. |
-| `CERT_PROVIDER_CHAIN` | `letsencrypt,zerossl,actalis,google` | Order tried in `auto` mode. |
+| `CERT_PROVIDER_CHAIN` | `letsencrypt,zerossl,actalis,google` | Order tried in `auto` mode. Unknown names are reported at startup and dropped; a chain naming none that exist is refused. Do not list `selfsigned` — it already closes every chain. |
 | `CERT_ATTEMPTS` | `2` | Attempts per authority before moving to the next one. |
 | `CERT_RETRY_DELAY` | `15` | Delay before the next attempt — seconds, or a duration like `30s`, `2m` (doubles, capped at 300s). |
 | `CERT_FALLBACK_SELFSIGNED` | `true` | Install a local certificate when every authority fails. |
@@ -812,6 +823,13 @@ volumes:
 `certme status` then shows which authority actually signed each certificate.
 
 ### Tuning the fallback chain
+
+`CERT_EAB_KID` and `CERT_EAB_HMAC_KEY` are sent only to authorities that
+declare they require External Account Binding, so a credential issued by one CA
+is not offered to another on the way through the chain. The exception is
+`CERT_ACME_SERVER`: with the directory overridden, the table entry describes a
+server nginx-cert is not talking to, so the credentials go through and the
+server decides.
 
 In `auto` mode, `CERT_PROVIDER_CHAIN` is walked in order. Each authority gets
 `CERT_ATTEMPTS` tries with exponential backoff before the next one is used, and

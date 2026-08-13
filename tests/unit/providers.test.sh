@@ -164,6 +164,39 @@ test_no_eab_is_sent_when_none_is_configured() {
   assert_eq '' "$NC_EAB_HMAC"
 }
 
+# ...but without an overridden directory the table is exact, and one
+# authority's credentials have no business reaching another. In "auto" mode the
+# chain starts at Let's Encrypt, so a KID issued by HARICA was offered to
+# Boulder on the way past. Measured against the staging environment Boulder
+# accepts the account and ignores the field, so nothing broke -- which is
+# precisely why it went unnoticed.
+test_credentials_do_not_reach_an_authority_that_asks_for_none() {
+  _reset_providers
+  CFG_EAB_KID='kid-from-harica'; CFG_EAB_HMAC_KEY='hmac-from-harica'
+  CFG_ACME_SERVER=''
+
+  local id
+  for id in letsencrypt sslcom; do
+    NC_EAB_KID='stale'; NC_EAB_HMAC='stale'
+    provider::resolve_eab "$id"
+    assert_eq '' "$NC_EAB_KID"  "${id} declares eab: no and must receive nothing"
+    assert_eq '' "$NC_EAB_HMAC" "${id} declares eab: no and must receive nothing"
+  done
+}
+
+test_credentials_still_reach_the_authorities_that_require_them() {
+  _reset_providers
+  CFG_EAB_KID='kid-from-harica'; CFG_EAB_HMAC_KEY='hmac-from-harica'
+  CFG_ACME_SERVER=''
+
+  local id
+  for id in harica actalis google certum sectigo; do
+    NC_EAB_KID=''; NC_EAB_HMAC=''
+    provider::resolve_eab "$id"
+    assert_eq 'kid-from-harica' "$NC_EAB_KID" "${id} requires an EAB and must receive it"
+  done
+}
+
 test_an_overridden_directory_is_named_by_its_host() {
   _reset_providers
   CFG_ACME_SERVER='https://acme-v02.harica.gr/acme/uuid/directory'

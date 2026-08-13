@@ -345,6 +345,104 @@ test_exposes_the_parsed_durations_in_seconds() {
   assert_eq '21600' "$CFG_FAILURE_COOLDOWN_MAX_S"
 }
 
+# --- CERT_PROVIDER_CHAIN is checked at startup, not discovered mid-run -----
+
+# Not fatal per entry, on purpose: retired authorities are removed from
+# providers.tsv rather than left to time out on every run, so pulling a newer
+# image must not refuse to start over a name that has simply gone.
+test_an_unknown_authority_in_the_chain_warns_and_is_dropped() {
+  local out
+  # The suite runs at "error" so assertions read values rather than messages;
+  # this one is about the message.
+  out=$( NC_LOG_LEVEL=warn
+         _load_config CERT_EMAIL=a@b.com CERT_DOMAINS=example.com \
+           CERT_PROVIDER_CHAIN=letsencrypt,buypass 2>&1 >/dev/null )
+  assert_contains "$out" 'buypass'
+  assert_contains "$out" 'CERT_PROVIDER_CHAIN'
+}
+
+# A chain with nothing usable left silently reduces every certificate to the
+# local authority, which is not a state to start in.
+test_rejects_a_chain_naming_no_known_authority() {
+  assert_fails _load_config_fails CERT_EMAIL=a@b.com CERT_DOMAINS=example.com \
+    CERT_PROVIDER_CHAIN=nope,nada
+}
+
+# ...unless the chain is not what will be used.
+test_a_dead_chain_is_tolerated_when_a_provider_is_pinned() {
+  assert_ok _load_config CERT_EMAIL=a@b.com CERT_DOMAINS=example.com \
+    CERT_PROVIDER=letsencrypt CERT_PROVIDER_CHAIN=nope
+}
+
+test_rejects_selfsigned_inside_the_chain() {
+  assert_fails _load_config_fails CERT_EMAIL=a@b.com CERT_DOMAINS=example.com \
+    CERT_PROVIDER_CHAIN=letsencrypt,selfsigned
+}
+
+# --- option values may be quoted -------------------------------------------
+#
+# ";" separates certificates and also separates HSTS directives, so the
+# spelling RFC 6797 uses -- and every guide shows -- was cut in half and its
+# remainder parsed as a second certificate. Only the quoted form can tell the
+# two meanings apart.
+test_a_quoted_option_value_may_contain_a_semicolon_and_a_space() {
+  _parse 'example.com | hsts="max-age=63072000; includeSubDomains"'
+  assert_eq '1' "${#NC_SPEC_NAMES[@]}" 'the quoted semicolon must not start a certificate'
+  assert_eq 'max-age=63072000; includeSubDomains' "${NC_SPEC_HSTS[example.com]}"
+}
+
+test_single_quotes_work_too_and_the_separator_still_separates() {
+  _parse $'a.example.com | hsts=\'max-age=1; preload\'; b.example.com'
+  assert_eq '2' "${#NC_SPEC_NAMES[@]}"
+  assert_eq 'max-age=1; preload' "${NC_SPEC_HSTS[a.example.com]}"
+}
+
+# Quoting rules, never evaluation: the value reaches nginx as text.
+test_a_quoted_value_is_not_evaluated() {
+  _parse 'example.com | hsts="max-age=$(id -u)"'
+  assert_contains "${NC_SPEC_HSTS[example.com]}" '$(id'
+}
+
+test_rejects_unbalanced_quotes_in_the_options() {
+  assert_fails _load_config_fails CERT_EMAIL=a@b.com \
+    'CERT_DOMAINS=example.com | hsts="never closed'
+}
+
+# The value lands inside a quoted nginx directive, where a double quote closes
+# the string early and everything after it becomes configuration.
+test_rejects_a_header_value_that_would_inject_nginx_directives() {
+  assert_fails _load_config_fails CERT_EMAIL=a@b.com CERT_DOMAINS=example.com \
+    'CERT_HSTS=max-age=1"; return 444; #'
+  assert_fails _load_config_fails CERT_EMAIL=a@b.com \
+    'CERT_DOMAINS=example.com | hsts="max-age=1\"; return 444; #"'
+}
+
+# --- loading twice must describe the same configuration, not a conflict ----
+#
+# Only NC_SPEC_NAMES was cleared, so the per-certificate maps kept their
+# previous contents and the second load died on its own leftovers with
+# "two certificates share the same name".
+test_loading_the_configuration_twice_is_idempotent() {
+  _reset_specs
+  export CERT_EMAIL=a@b.com CERT_DOMAINS='example.com, www.example.com'
+  config::load
+  config::load
+  assert_eq '1' "${#NC_SPEC_NAMES[@]}"
+  assert_eq 'example.com www.example.com' "${NC_SPEC_DOMAINS[example.com]}"
+}
+
+# A certificate dropped from CERT_DOMAINS must not survive in the maps the
+# nginx configuration is rendered from.
+test_reloading_forgets_a_certificate_that_is_no_longer_declared() {
+  _reset_specs
+  export CERT_EMAIL=a@b.com
+  CERT_DOMAINS=$'one.example.com\ntwo.example.com' config::load
+  assert_eq '2' "${#NC_SPEC_NAMES[@]}"
+  CERT_DOMAINS='one.example.com' config::load
+  assert_eq '1' "${#NC_SPEC_NAMES[@]}"
+  assert_eq '' "${NC_SPEC_DOMAINS[two.example.com]:-}"
+}
+
 # CERT_ACME_SERVER replaces the directory URL of every authority in the chain,
 # so a summary that names the chain without naming the override describes a run
 # that will not happen.

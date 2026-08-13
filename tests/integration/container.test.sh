@@ -617,6 +617,54 @@ else
   ko 'and no authority is named that did not issue it' "$out"
 fi
 
+# -- Scenario 20: a quoted option value reaches the response header ----------
+#
+# ";" separates certificates and also separates HSTS directives, so
+# "max-age=63072000; includeSubDomains" -- the spelling RFC 6797 uses -- was cut
+# in half and its remainder parsed as a second certificate. includeSubDomains
+# was unreachable per certificate.
+cleanup
+docker run -d --name "$CONTAINER" --network none -e CERT_EMAIL='a@b.co' \
+  -e CERT_DOMAINS='hsts.test | hsts="max-age=63072000; includeSubDomains"' \
+  "$IMAGE" >/dev/null
+for _ in $(seq 1 40); do
+  docker logs "$CONTAINER" 2>&1 | grep -q 'nginx-cert is up' && break
+  sleep 1
+done
+count=$(docker exec "$CONTAINER" certme list 2>/dev/null | grep -c .)
+check 'a quoted semicolon does not start a second certificate' '1' "$count"
+hdr=$(docker exec "$CONTAINER" curl -sk -o /dev/null -D - -H 'Host: hsts.test' \
+        https://127.0.0.1/ 2>/dev/null | grep -i 'strict-transport-security')
+if [[ $hdr == *'max-age=63072000'* && $hdr == *'includeSubDomains'* ]]; then
+  ok 'the whole HSTS value reaches the response header'
+else
+  ko 'the whole HSTS value reaches the response header' "${hdr:-no Strict-Transport-Security header}"
+fi
+
+out=$(docker run --rm --network none -e CERT_EMAIL='a@b.co' \
+        -e CERT_DOMAINS='q.test | hsts="never closed' "$IMAGE" 2>&1); rc=$?
+check 'unbalanced quotes in an option exit with code 2' '2' "$rc"
+
+# -- Scenario 21: a typo in CERT_PROVIDER_CHAIN is reported at startup -------
+#
+# It used to surface only from provider::chain_for, once per certificate, in
+# the middle of a run -- while the same typo in CERT_PROVIDER stopped the
+# container. Not fatal per entry: retired authorities are removed from
+# providers.tsv, so a newer image must not refuse to start over a name that has
+# simply gone.
+out=$(docker run --rm --network none -e CERT_EMAIL='a@b.co' \
+        -e CERT_DOMAINS='chain.test' -e CERT_PROVIDER_CHAIN='letsencrypt,buypass' \
+        --entrypoint /opt/nginx-cert/bin/certme "$IMAGE" config 2>&1); rc=$?
+check 'an unknown authority in the chain does not stop the container' '0' "$rc"
+if [[ $out == *'buypass'* && $out == *'CERT_PROVIDER_CHAIN'* ]]; then
+  ok 'and is named once, at startup'
+else
+  ko 'and is named once, at startup' "$out"
+fi
+out=$(docker run --rm --network none -e CERT_EMAIL='a@b.co' \
+        -e CERT_DOMAINS='chain.test' -e CERT_PROVIDER_CHAIN='nope,nada' "$IMAGE" 2>&1); rc=$?
+check 'a chain naming no known authority exits with code 2' '2' "$rc"
+
 # -- Result ------------------------------------------------------------------
 printf '\n  %d passed, %d failed\n' "$PASSED" "$FAILED"
 ((FAILED == 0))

@@ -212,6 +212,45 @@ Second pass over the same tree, same method:
 - `domain::_ipv4_is_private` declared only `IFS` local, so every name
   classification left two stray variables in the global scope.
 
+Third pass, on the three items the second one had seen but not investigated:
+
+- **One authority's EAB credentials were sent to every other.** `CERT_EAB_KID`
+  and `CERT_EAB_HMAC_KEY` went to whichever authority was being contacted,
+  whatever `providers.tsv` said it needed — so in `auto` mode a KID issued by
+  HARICA was offered to Let's Encrypt, first in the default chain. Measured
+  against the staging environment, Boulder accepts the account and ignores the
+  field, which is exactly why nothing ever surfaced; RFC 8555 does not oblige
+  every server to be that tolerant, and an authority that did not ask for a
+  credential has no business receiving one. They now go only to authorities
+  that declare `eab: required` — and, unchanged, to a directory overridden with
+  `CERT_ACME_SERVER`, where the table describes a server we are not talking to.
+- **`CERT_PROVIDER_CHAIN` was not checked at startup.** A typo surfaced as a
+  warning from the middle of a run, once per certificate, while the same typo
+  in `CERT_PROVIDER` stopped the container. It is reported once at load now.
+  Deliberately not fatal per entry — retired authorities are removed from
+  `providers.tsv` rather than left to time out, so a newer image must not refuse
+  to start over a name that has simply gone — but a chain naming nothing that
+  exists is refused, because it silently reduces every certificate to the local
+  authority. Listing `selfsigned` there is refused too, with the setting that
+  actually controls it.
+- **A per-certificate option could not carry a space, or a `;`.** Options were
+  split on whitespace and nothing else, and `;` separates certificates as well
+  as HSTS directives — so `hsts="max-age=63072000; includeSubDomains"`, the
+  spelling RFC 6797 uses, was cut in half and its remainder parsed as a second
+  certificate. `includeSubDomains` was reachable only through the global
+  `CERT_HSTS`. Option values may now be quoted, with command-line quoting rules
+  and no evaluation, the same treatment `CERT_ACME_ARGS` already had; unbalanced
+  quotes are reported instead of silently mangled.
+- An HSTS value is emitted inside a quoted nginx directive and was never
+  checked, so a double quote closed the string early and everything after it
+  became configuration — the hole `config::valid_upstream` was added to close,
+  made easier to reach by quoted option values.
+- **`config::load` was not idempotent.** Only `NC_SPEC_NAMES` was cleared, so
+  the per-certificate maps kept their previous contents and a second load in the
+  same process died on its own leftovers with "two certificates share the same
+  name" — a configuration problem the operator does not have. No shipped path
+  loads twice, which is what made it a trap rather than a bug.
+
 ### Added
 
 - `renew_days=` per certificate. The renewal threshold only means something

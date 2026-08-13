@@ -87,14 +87,24 @@ provider::resolve_eab() {
   local id=$1
   NC_EAB_KID=''; NC_EAB_HMAC=''
 
-  # Explicitly supplied credentials always win, whatever the table says.
+  # Explicitly supplied credentials win over the table -- but only where the
+  # table is not the authority on the question.
   #
-  # This is not a nicety: with CERT_ACME_SERVER pointing at another directory,
-  # the table entry is only a carrier and its "eab: no" describes a server we
-  # are not talking to. Consulting the table first meant the credentials were
-  # silently dropped and the real server answered "externalAccountRequired".
-  # A server that does not need an EAB ignores one that is sent.
-  if [[ -n ${CFG_EAB_KID:-} && -n ${CFG_EAB_HMAC_KEY:-} ]]; then
+  # With CERT_ACME_SERVER pointing at another directory the entry is a mere
+  # carrier and its "eab: no" describes a server we are not talking to:
+  # consulting the table first meant the credentials were silently dropped and
+  # the real server answered "externalAccountRequired". That case still sends
+  # them, because we genuinely do not know what the overridden server wants.
+  #
+  # Without the override the entry is exact, and sending them unconditionally
+  # meant one authority's credentials went to another. In "auto" mode the chain
+  # starts at Let's Encrypt, so a KID and HMAC issued by HARICA were offered to
+  # Boulder on the way past. Measured against the staging environment, Boulder
+  # accepts the account and ignores the field -- nothing breaks -- but RFC 8555
+  # does not oblige every server to be that tolerant, and an authority that did
+  # not ask for a credential has no business receiving one.
+  if [[ -n ${CFG_EAB_KID:-} && -n ${CFG_EAB_HMAC_KEY:-} ]] \
+     && { [[ -n ${CFG_ACME_SERVER:-} ]] || provider::needs_eab "$id"; }; then
     NC_EAB_KID=$CFG_EAB_KID
     NC_EAB_HMAC=$CFG_EAB_HMAC_KEY
     return 0
@@ -200,7 +210,10 @@ provider::chain_for() {
   local id out=() skipped=()
   for id in ${candidates[@]+"${candidates[@]}"}; do
     if ! provider::exists "$id"; then
-      log::warn "CERT_PROVIDER_CHAIN: '${id}' is not in providers.tsv, ignoring it."
+      # Reported once by config::validate, at startup, where the operator is
+      # still reading. Warning again here repeated it in the middle of every
+      # run, once per certificate.
+      log::debug "CERT_PROVIDER_CHAIN: '${id}' is not in providers.tsv, ignoring it."
       continue
     fi
     if util::is_true "$staging"; then

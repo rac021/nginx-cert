@@ -158,7 +158,9 @@ CERT_EAB_HMAC_KEY: ${ACTALIS_EAB_HMAC}
 
 Renewal, nginx reload, and fallback to another authority on failure are handled
 automatically. See [`examples/compose.actalis.yml`](examples/compose.actalis.yml).
-The script is kept at the repository root for reference and can be deleted.
+
+The script itself no longer ships: nothing in nginx-cert reads it, and a copy
+still sitting in your own tree can go with it.
 
 ---
 

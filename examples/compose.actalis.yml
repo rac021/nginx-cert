@@ -8,9 +8,9 @@
 #   export ACTALIS_EAB_HMAC=...
 #   docker compose -f examples/compose.actalis.yml up -d
 #
-# This fully replaces the standalone actalis.sh script: no ephemeral certbot
-# container, no temporary nginx on port 80, and renewal is handled without any
-# manual step.
+# This replaces the standalone actalis.sh script version 1 shipped: no ephemeral
+# certbot container, no temporary nginx on port 80, and renewal is handled
+# without any manual step.
 
 services:
   nginx-cert:

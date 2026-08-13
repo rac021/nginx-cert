@@ -9,7 +9,6 @@ examples
 *.md
 !README.md
 docker-compose*.yml
-actalis.sh
 data
 letsencrypt
 .DS_Store

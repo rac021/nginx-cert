@@ -4,7 +4,7 @@ All notable changes to this project are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [2.4.0] - 2026-10-15
 
 ### Fixed
 
@@ -13,6 +13,12 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   under a 30-day threshold was never renewed.
 - **The unit test runner counted only the last assertion of each test**, so a
   failed assertion followed by a passing one went unnoticed.
+
+### Security
+
+- **nginx 1.31.7**, pinned by version and digest. The image followed the moving
+  tag `1.30-alpine-slim` and shipped 1.30.4, without the fixes for
+  CVE-2026-15176 and CVE-2026-93479.
 
 ### Added
 

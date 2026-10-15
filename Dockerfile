@@ -5,7 +5,11 @@
 # Two stages: the first fetches and verifies acme.sh, the second produces the
 # final image. No archive and no build tool survive into the shipped image.
 
-ARG NGINX_VERSION=1.30-alpine-slim
+# Exact version and digest: a moving tag ("1.30") rebuilt the same Dockerfile
+# on whatever nginx was current, and 1.30.4 shipped after 1.30.6 had fixed
+# CVE-2026-15176 and CVE-2026-93479 (the latter in the stream module).
+ARG NGINX_VERSION=1.31.7-alpine-slim
+ARG NGINX_DIGEST=sha256:ebd058041a732a2b2dc0b606e34572dd8e0034de6a4aa4d50d8c13a240ac6005
 
 # ---------------------------------------------------------------------------
 # Stage 1 -- verified retrieval of acme.sh
@@ -49,7 +53,7 @@ RUN set -eux; \
 # ---------------------------------------------------------------------------
 # Stage 2 -- final image
 # ---------------------------------------------------------------------------
-FROM nginx:${NGINX_VERSION}
+FROM nginx:${NGINX_VERSION}@${NGINX_DIGEST}
 
 ARG VERSION=dev
 ARG VCS_REF=unknown

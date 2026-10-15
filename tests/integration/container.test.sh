@@ -30,6 +30,10 @@ cleanup() {
 }
 trap cleanup EXIT
 
+# Never "producer | grep -q": grep exits on the first match, the producer takes
+# SIGPIPE, and pipefail turns a found line into a failure. grep >/dev/null reads
+# to the end.
+
 check() {
   local label=$1 expected=$2 actual=$3
   if [[ $expected == "$actual" ]]; then ok "$label"; else ko "$label" "expected '${expected}', got '${actual}'"; fi
@@ -66,18 +70,18 @@ docker run -d --name "$CONTAINER" -v "${VOLUME}:/data" \
 
 for _ in $(seq 1 30); do
   [[ "$(docker inspect "$CONTAINER" --format '{{.State.Running}}' 2>/dev/null)" == true ]] || break
-  docker logs "$CONTAINER" 2>&1 | grep -q 'nginx-cert is up' && break
+  docker logs "$CONTAINER" 2>&1 | grep 'nginx-cert is up' >/dev/null && break
   sleep 1
 done
 
-if docker logs "$CONTAINER" 2>&1 | grep -q 'nginx-cert is up'; then
+if docker logs "$CONTAINER" 2>&1 | grep 'nginx-cert is up' >/dev/null; then
   ok 'the container reaches a running state'
 else
   ko 'the container reaches a running state' "$(docker logs "$CONTAINER" 2>&1 | tail -5)"
 fi
 
 # Internal names must never trigger a network call to a public authority.
-if docker logs "$CONTAINER" 2>&1 | grep -q "Let's Encrypt"; then
+if docker logs "$CONTAINER" 2>&1 | grep "Let's Encrypt" >/dev/null; then
   ko 'no public authority is contacted for internal names'
 else
   ok 'no public authority is contacted for internal names'
@@ -109,7 +113,7 @@ fi
 docker rm -f "${CONTAINER}-noacme" >/dev/null 2>&1
 docker run -d --name "${CONTAINER}-noacme" -p 18081:80 -e CERT_ENABLE=false "$IMAGE" >/dev/null
 for _ in $(seq 1 30); do
-  docker logs "${CONTAINER}-noacme" 2>&1 | grep -q 'nginx-cert is up' && break
+  docker logs "${CONTAINER}-noacme" 2>&1 | grep 'nginx-cert is up' >/dev/null && break
   sleep 1
 done
 code=$(curl -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:18081/healthz")
@@ -156,7 +160,8 @@ else
   ko 'certme status lists the certificates' "$status_out"
 fi
 
-if docker exec "$CONTAINER" certme status --json | jq -e '.certificates | length == 2' >/dev/null 2>&1; then
+# jq from the image: the host running the suite may not have it.
+if docker exec "$CONTAINER" sh -c "certme status --json | jq -e '.certificates | length == 2'" >/dev/null 2>&1; then
   ok 'certme status --json emits valid JSON'
 else
   ko 'certme status --json emits valid JSON' "$(docker exec "$CONTAINER" certme status --json 2>&1 | head -3)"
@@ -191,11 +196,11 @@ rm -f /tmp/nc-config.$$
 docker rm -f "${CONTAINER}-pid" >/dev/null 2>&1
 docker run -d --name "${CONTAINER}-pid" -p 18082:80 -e CERT_DOMAINS=localhost "$IMAGE" >/dev/null
 for _ in $(seq 1 30); do
-  docker logs "${CONTAINER}-pid" 2>&1 | grep -q 'nginx-cert is up' && break
+  docker logs "${CONTAINER}-pid" 2>&1 | grep 'nginx-cert is up' >/dev/null && break
   sleep 1
 done
 docker stop "${CONTAINER}-pid" >/dev/null
-if docker logs "${CONTAINER}-pid" 2>&1 | grep -q 'unlink().*nginx.pid.*failed'; then
+if docker logs "${CONTAINER}-pid" 2>&1 | grep 'unlink().*nginx.pid.*failed' >/dev/null; then
   ko 'shutdown leaves no pid-file alert' "$(docker logs "${CONTAINER}-pid" 2>&1 | grep 'unlink()' | head -1)"
 else
   ok 'shutdown leaves no pid-file alert'
@@ -229,9 +234,11 @@ check 'shutdown exit code is 0 (not SIGKILL)' '0' "$exit_code"
 fingerprint_before=$(docker run --rm -v "${VOLUME}:/data" --entrypoint openssl "$IMAGE" \
   x509 -in /data/certs/localhost/fullchain.pem -noout -fingerprint 2>/dev/null)
 
+# Only this start's lines: the first boot already logged "nginx-cert is up".
+restarted_at=$(date +%s)
 docker start "$CONTAINER" >/dev/null
 for _ in $(seq 1 30); do
-  docker logs "$CONTAINER" 2>&1 | grep -q 'nginx-cert is up' && break
+  docker logs --since "$restarted_at" "$CONTAINER" 2>&1 | grep 'nginx-cert is up' >/dev/null && break
   sleep 1
 done
 fingerprint_after=$(docker exec "$CONTAINER" openssl x509 \
@@ -239,7 +246,7 @@ fingerprint_after=$(docker exec "$CONTAINER" openssl x509 \
 
 check 'the certificate survives a restart' "$fingerprint_before" "$fingerprint_after"
 
-if docker logs "$CONTAINER" 2>&1 | tail -40 | grep -q 'nothing to do'; then
+if docker logs --since "$restarted_at" "$CONTAINER" 2>&1 | grep 'nothing to do' >/dev/null; then
   ok 'a valid certificate is not reissued on restart'
 else
   ko 'a valid certificate is not reissued on restart' "$(docker logs "$CONTAINER" 2>&1 | tail -5)"
@@ -321,7 +328,7 @@ if docker run --rm --network none -e CERT_EMAIL='a@b.co' -e CERT_DOMAINS='nossca
      -e CERT_SELFSIGNED_CA=false --entrypoint /bin/bash "$IMAGE" \
      -c '/opt/nginx-cert/bin/certme issue >/dev/null 2>&1
          openssl x509 -in /data/certs/nossca.test/fullchain.pem -noout -ext subjectAltName' \
-     2>/dev/null | grep -q 'DNS:nossca.test'; then
+     2>/dev/null | grep 'DNS:nossca.test' >/dev/null; then
   ok 'CERT_SELFSIGNED_CA=false issues a certificate carrying its SAN'
 else
   ko 'CERT_SELFSIGNED_CA=false issues a certificate carrying its SAN'
@@ -338,7 +345,7 @@ docker run -d --name "$CONTAINER" --network none \
   -e CERT_EMAIL='a@b.co' -e CERT_DOMAINS='localhost | upstream=app:8080' \
   "$IMAGE" >/dev/null
 for _ in $(seq 1 40); do
-  docker logs "$CONTAINER" 2>&1 | grep -q 'nginx-cert is up' && break
+  docker logs "$CONTAINER" 2>&1 | grep 'nginx-cert is up' >/dev/null && break
   sleep 1
 done
 code=$(docker exec "$CONTAINER" curl -s -o /dev/null -w '%{http_code}' \
@@ -358,7 +365,7 @@ docker run -d --name "$CONTAINER" --network none \
   -e CERT_EMAIL='a@b.co' -e CERT_DOMAINS='slow-boot.example.com' \
   -e CERT_ATTEMPTS=3 -e CERT_ACME_TIMEOUT=60s "$IMAGE" >/dev/null
 for _ in $(seq 1 40); do
-  docker logs "$CONTAINER" 2>&1 | grep -q 'Attempt 1/3' && break
+  docker logs "$CONTAINER" 2>&1 | grep 'Attempt 1/3' >/dev/null && break
   sleep 1
 done
 start=$(date +%s)
@@ -395,13 +402,13 @@ docker run -d --name "$CONTAINER" --network none \
   -e CERT_EMAIL='a@b.co' -e CERT_DOMAINS='unmanaged.test | upstream=app:8080' \
   -e CERT_MANAGE_NGINX=false -v "${userconf}:/etc/nginx/nginx.conf:ro" "$IMAGE" >/dev/null
 for _ in $(seq 1 40); do
-  docker logs "$CONTAINER" 2>&1 | grep -q 'nginx-cert is up' && break
+  docker logs "$CONTAINER" 2>&1 | grep 'nginx-cert is up' >/dev/null && break
   sleep 1
 done
 rm -f "$userconf"
 check 'the container starts with CERT_MANAGE_NGINX=false' 'running' \
   "$(docker inspect "$CONTAINER" --format '{{.State.Status}}')"
-if docker logs "$CONTAINER" 2>&1 | grep -qi 'emerg'; then
+if docker logs "$CONTAINER" 2>&1 | grep -i 'emerg' >/dev/null; then
   ko 'no emergency in the log with an unmanaged nginx.conf' \
      "$(docker logs "$CONTAINER" 2>&1 | grep -i emerg | head -2)"
 else
@@ -413,7 +420,7 @@ fi
 # nginx's compiled-in defaults: CERT_SSL_POLICY=modern still completed a TLS 1.2
 # handshake, and ssl_session_tickets / ssl_early_data were never turned off.
 if docker exec "$CONTAINER" openssl s_client -connect 127.0.0.1:443 -tls1_2 \
-     -servername unmanaged.test </dev/null 2>&1 | grep -q 'Protocol *: *TLSv1.2'; then
+     -servername unmanaged.test </dev/null 2>&1 | grep 'Protocol *: *TLSv1.2' >/dev/null; then
   ok 'the default policy accepts TLS 1.2 with an unmanaged nginx.conf'
 else
   ko 'the default policy accepts TLS 1.2 with an unmanaged nginx.conf'
@@ -435,19 +442,19 @@ docker run -d --name "${CONTAINER}-modern" --network none \
   -e CERT_MANAGE_NGINX=false -e CERT_SSL_POLICY=modern \
   -v "${userconf}:/etc/nginx/nginx.conf:ro" "$IMAGE" >/dev/null
 for _ in $(seq 1 40); do
-  docker logs "${CONTAINER}-modern" 2>&1 | grep -q 'nginx-cert is up' && break
+  docker logs "${CONTAINER}-modern" 2>&1 | grep 'nginx-cert is up' >/dev/null && break
   sleep 1
 done
 rm -f "$userconf"
 if docker exec "${CONTAINER}-modern" openssl s_client -connect 127.0.0.1:443 -tls1_2 \
-     -servername modern.test </dev/null 2>&1 | grep -q 'Protocol *: *TLSv1.2'; then
+     -servername modern.test </dev/null 2>&1 | grep 'Protocol *: *TLSv1.2' >/dev/null; then
   ko 'CERT_SSL_POLICY=modern refuses TLS 1.2 with an unmanaged nginx.conf' \
      'the handshake succeeded, so the TLS policy snippet is not in effect'
 else
   ok 'CERT_SSL_POLICY=modern refuses TLS 1.2 with an unmanaged nginx.conf'
 fi
 if docker exec "${CONTAINER}-modern" openssl s_client -connect 127.0.0.1:443 -tls1_3 \
-     -servername modern.test </dev/null 2>&1 | grep -q 'Protocol *: *TLSv1.3'; then
+     -servername modern.test </dev/null 2>&1 | grep 'Protocol *: *TLSv1.3' >/dev/null; then
   ok 'and still serves TLS 1.3'
 else
   ko 'and still serves TLS 1.3'
@@ -460,7 +467,7 @@ docker run -d --name "$CONTAINER" --network none -e CERT_EMAIL='a@b.co' \
   -e CERT_DOMAINS=$'keep.test | upstream=app:8080\nplain.test | upstream=app:8080 redirect=false\n*.wild.test | upstream=app:8080 redirect=false' \
   "$IMAGE" >/dev/null
 for _ in $(seq 1 40); do
-  docker logs "$CONTAINER" 2>&1 | grep -q 'nginx-cert is up' && break
+  docker logs "$CONTAINER" 2>&1 | grep 'nginx-cert is up' >/dev/null && break
   sleep 1
 done
 code=$(docker exec "$CONTAINER" curl -s -o /dev/null -w '%{http_code}' \
@@ -495,7 +502,7 @@ docker run -d --name "$CONTAINER" --network none -e CERT_EMAIL='a@b.co' \
   -e CERT_DOMAINS=$'plain.test | upstream=app:8080\nsecure.test | upstream=app:8080 redirect=true' \
   "$IMAGE" >/dev/null
 for _ in $(seq 1 40); do
-  docker logs "$CONTAINER" 2>&1 | grep -q 'nginx-cert is up' && break
+  docker logs "$CONTAINER" 2>&1 | grep 'nginx-cert is up' >/dev/null && break
   sleep 1
 done
 code=$(docker exec "$CONTAINER" curl -s -o /dev/null -w '%{http_code}' \
@@ -536,13 +543,13 @@ cleanup
 docker run -d --name "$CONTAINER" --network none \
   -e CERT_PROVIDER=selfsigned -e CERT_DOMAINS='pinned.example.com' "$IMAGE" >/dev/null
 for _ in $(seq 1 40); do
-  docker logs "$CONTAINER" 2>&1 | grep -q 'nginx-cert is up' && break
+  docker logs "$CONTAINER" 2>&1 | grep 'nginx-cert is up' >/dev/null && break
   sleep 1
 done
 check 'CERT_PROVIDER=selfsigned starts the container' 'running' \
   "$(docker inspect "$CONTAINER" --format '{{.State.Status}}')"
 # A public name pinned to the local authority must not reach out either.
-if docker logs "$CONTAINER" 2>&1 | grep -q "Let's Encrypt"; then
+if docker logs "$CONTAINER" 2>&1 | grep "Let's Encrypt" >/dev/null; then
   ko 'CERT_PROVIDER=selfsigned contacts no authority' \
      "$(docker logs "$CONTAINER" 2>&1 | grep -m1 "Let's Encrypt")"
 else
@@ -579,7 +586,7 @@ cleanup
 docker run -d --name "$CONTAINER" --network none -e CERT_EMAIL='a@b.co' \
   -e CERT_DOMAINS=$'first.test\nbroken.test\nlast.test' "$IMAGE" >/dev/null
 for _ in $(seq 1 40); do
-  docker logs "$CONTAINER" 2>&1 | grep -q 'nginx-cert is up' && break
+  docker logs "$CONTAINER" 2>&1 | grep 'nginx-cert is up' >/dev/null && break
   sleep 1
 done
 docker exec "$CONTAINER" sh -c 'printf "garbage\n" > /data/certs/broken.test/fullchain.pem'
@@ -650,7 +657,7 @@ docker run -d --name "$CONTAINER" --network none -e CERT_EMAIL='a@b.co' \
   -e CERT_DOMAINS='hsts.test | hsts="max-age=63072000; includeSubDomains"' \
   "$IMAGE" >/dev/null
 for _ in $(seq 1 40); do
-  docker logs "$CONTAINER" 2>&1 | grep -q 'nginx-cert is up' && break
+  docker logs "$CONTAINER" 2>&1 | grep 'nginx-cert is up' >/dev/null && break
   sleep 1
 done
 count=$(docker exec "$CONTAINER" certme list 2>/dev/null | grep -c .)
@@ -696,12 +703,11 @@ cleanup
 docker run -d --name "$CONTAINER" -p "${HTTPS_PORT}:443" \
   -e CERT_EMAIL='a@b.co' -e CERT_DOMAINS='alpn.test' -e CERT_CHALLENGE=tls-alpn-01 "$IMAGE" >/dev/null
 for _ in $(seq 1 40); do
-  docker logs "$CONTAINER" 2>&1 | grep -q 'nginx-cert is up' && break
+  docker logs "$CONTAINER" 2>&1 | grep 'nginx-cert is up' >/dev/null && break
   sleep 1
 done
 check 'HTTPS is served through the front' '200' \
   "$(curl -sk -o /dev/null -w '%{http_code}' --resolve "alpn.test:${HTTPS_PORT}:127.0.0.1" "https://alpn.test:${HTTPS_PORT}/")"
-# Captured first: with pipefail, grep -q closing the pipe early fails openssl.
 out=$(openssl s_client -connect "127.0.0.1:${HTTPS_PORT}" -servername alpn.test -alpn acme-tls/1 </dev/null 2>&1)
 if [[ $out == *'no peer certificate available'* ]]; then
   ok 'acme-tls/1 gets no certificate outside a validation'

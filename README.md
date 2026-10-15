@@ -35,7 +35,7 @@ happens on its own.
 | Tag | Points to | Use it when |
 |---|---|---|
 | `rac021/nginx-cert:v2` | latest 2.x | you want 2.x and its fixes automatically |
-| `rac021/nginx-cert:v2.6.0` | that exact release | you pin versions |
+| `rac021/nginx-cert:v2.7.0` | that exact release | you pin versions |
 | `rac021/nginx-cert:latest` | **still 1.x** | you have existing deployments that must not change |
 
 `latest` deliberately still serves the 1.x image. Deployments that pull
@@ -44,7 +44,7 @@ breaking changes -- certificates moved, variables removed, the container runs
 unprivileged. Moving to 2.x is an explicit decision: change the tag to `v2` and
 read [MIGRATION.md](MIGRATION.md).
 
-`:2`, `:2.6` and `:2.6.0` exist as well and point at the same images, for anyone
+`:2`, `:2.7` and `:2.7.0` exist as well and point at the same images, for anyone
 who prefers the unprefixed convention.
 
 ---

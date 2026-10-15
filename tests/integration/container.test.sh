@@ -160,6 +160,20 @@ else
   ko 'certme status lists the certificates' "$status_out"
 fi
 
+if [[ $status_out =~ [0-9]{4}-[0-9]{2}-[0-9]{2}\ \(D-[0-9]+\) ]]; then
+  ok 'certme status shows the expiry date and the days left'
+else
+  ko 'certme status shows the expiry date and the days left' "$status_out"
+fi
+
+help_out=$(docker exec "$CONTAINER" help 2>&1); rc=$?
+check '"docker exec <container> help" works' '0' "$rc"
+if [[ $help_out == *'EVERYDAY'* && $help_out == *'certme renew --force'* && $help_out == *'GOOD TO KNOW'* ]]; then
+  ok 'and prints the everyday commands and what is good to know'
+else
+  ko 'and prints the everyday commands and what is good to know' "$(head -5 <<<"$help_out")"
+fi
+
 # jq from the image: the host running the suite may not have it.
 if docker exec "$CONTAINER" sh -c "certme status --json | jq -e '.certificates | length == 2'" >/dev/null 2>&1; then
   ok 'certme status --json emits valid JSON'

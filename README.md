@@ -222,17 +222,17 @@ INFO  Next certificate check in 12h 25m 26s.
 `certme status`:
 
 ```
-CERTIFICATE                  STATE         AUTHORITY                  EXPIRES   DOMAINS
---------------------------------------------------------------------------------------
-example.com                  valid         R11                        D-89      example.com www.example.com
-api.example.com              valid         R11                        D-89      api.example.com
-internal.lan                 local         nginx-cert local developme D-364     internal.lan
+CERTIFICATE                  STATE         AUTHORITY                  EXPIRES            DOMAINS
+-----------------------------------------------------------------------------------------------------
+example.com                  valid         R11                        2027-01-13 (D-89)  example.com www.example.com
+api.example.com              valid         R11                        2027-01-13 (D-89)  api.example.com
+internal.lan                 local         nginx-cert local developme 2027-10-15 (D-364) internal.lan
 ```
 
 States: `valid`, `renew due`, `local` (signed by this container, not publicly
 trusted), `EXPIRED`, `missing` (no file yet) and `unreadable` (a file is there
 but openssl cannot parse it). An expired certificate shows how long ago it
-lapsed — `-5d` — rather than a day count.
+lapsed — `2026-10-10 (-5d)` — rather than a day count.
 
 `certme providers` — which authorities your credentials actually unlock:
 
@@ -1669,11 +1669,22 @@ docker logs -f nginx-cert                     # everything, timestamped
 
 ```
 docker exec <container> certme <command>
+docker exec <container> help          # every command, examples, and what is good to know
+```
+
+The ones you need day to day:
+
+```bash
+docker exec <container> certme status                  # expiry date, days left, authority
+docker exec <container> certme renew                   # renew what is due, nothing otherwise
+docker exec <container> certme renew --force           # renew now, whatever the date
+docker exec <container> certme renew app.example.com   # one certificate only
+docker exec <container> certme config                  # settings in effect, challenge included
 ```
 
 | Command | What it does |
 |---|---|
-| `status` | Table of every certificate: authority, expiry, whether renewal is due |
+| `status` | Table of every certificate: authority, expiry date and days left, whether renewal is due |
 | `status --json` | Same, machine-readable (monitoring, scripts) |
 | `issue [name…]` | Issue or renew what needs it; `--force` to renew regardless |
 | `renew` | Alias for `issue` |

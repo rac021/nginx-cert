@@ -15,6 +15,20 @@ certme -- manage nginx-cert TLS certificates
 
 USAGE
     certme <command> [options]
+    From the host:  docker exec <container> certme <command>
+                    docker exec <container> help        (this page)
+
+EVERYDAY
+    certme status                   Each certificate: authority, expiry date,
+                                    days left, whether a renewal is due.
+    certme renew                    Renew what is due (fewer than CERT_RENEW_DAYS
+                                    days left); does nothing otherwise.
+    certme renew --force            Renew now, whatever the date.
+    certme renew app.example.com    One certificate only.
+    certme config                   Settings in effect: authority, challenge,
+                                    renewal, secrets masked.
+    certme providers                Authorities, and which ones your credentials
+                                    unlock.
 
 COMMANDS
     issue [name...]     Issue or renew the certificates that need it.
@@ -41,6 +55,16 @@ EXIT CODES
     0  success          3  no authority could issue the certificate
     1  failure          4  invalid nginx configuration
     2  configuration    5  another operation is already running
+
+GOOD TO KNOW
+    Renewal is automatic: every CERT_RENEW_INTERVAL (12h by default), a certificate
+    with fewer than CERT_RENEW_DAYS (30) days left is renewed and nginx reloaded,
+    without dropping a connection. No cron is needed.
+    A failed validation names the other challenge in the log (CERT_CHALLENGE:
+    http-01 on port 80, tls-alpn-01 on port 443, dns-01 by TXT record).
+    Logs: docker logs <container>; full ACME trace in /data/acme/acme.log.
+    Files: /data/certs/<name>/fullchain.pem and privkey.pem.
+    A CERT_* change takes effect when the container is recreated.
 EOF
 }
 
@@ -163,9 +187,9 @@ cmd::status() {
   # Pad first, colour second. Escape sequences carry no display width, so a
   # printf field width applied to an already-coloured string counts the escape
   # bytes and shifts every following column.
-  local fmt='%-28s %s %-26s %-9s %s\n'
+  local fmt='%-28s %s %-26s %-18s %s\n'
   printf "$C_BOLD$fmt$C_RESET" 'CERTIFICATE' 'STATE        ' 'AUTHORITY' 'EXPIRES' 'DOMAINS'
-  printf '%s%s%s\n' "$C_DIM" "$(printf -- '-%.0s' $(seq 1 92))" "$C_RESET"
+  printf '%s%s%s\n' "$C_DIM" "$(printf -- '-%.0s' $(seq 1 101))" "$C_RESET"
 
   local name state color issuer days reason padded
   for name in "${NC_SPEC_NAMES[@]}"; do
@@ -195,7 +219,10 @@ cmd::status() {
 
     # "D-5" means five days left; "-5d" means five days past expiry. "D--5"
     # said neither.
+    # The date, and how far off it is: "2027-01-13 (D-89)".
     local expiry="D-${days}"; ((days < 0)) && expiry="${days}d"
+    local not_after; not_after=$(certs::not_after "$name" 2>/dev/null) || not_after=''
+    [[ -n $not_after ]] && expiry="${not_after:0:10} (${expiry})"
     printf -v padded '%-13s' "$state"
     printf "$fmt" "$name" "${color}${padded}${C_RESET}" "${issuer:0:26}" "$expiry" "${NC_SPEC_DOMAINS[$name]}"
   done
@@ -317,6 +344,8 @@ cmd::health() {
 
 # --- Entry point -----------------------------------------------------------
 main() {
+  # Installed as "help" too: the one command a newcomer guesses.
+  [[ ${0##*/} == help ]] && { usage; return 0; }
   local cmd=${1:-help}; shift || true
 
   case $cmd in

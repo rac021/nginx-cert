@@ -96,8 +96,10 @@ COPY providers/                   ${NC_ROOT}/providers/
 COPY templates/                   ${NC_ROOT}/templates/
 
 # One copy of the script, two access paths: the repository layout is mirrored
-# inside the image, and "certme" stays on the PATH.
-RUN ln -sf ${NC_ROOT}/bin/certme /usr/local/bin/certme
+# inside the image, and "certme" stays on the PATH -- as "help" as well, which
+# prints the usage: `docker exec <container> help`.
+RUN ln -sf ${NC_ROOT}/bin/certme /usr/local/bin/certme \
+ && ln -sf ${NC_ROOT}/bin/certme /usr/local/bin/help
 
 # The image runs unprivileged: every directory nginx-cert writes to at runtime
 # belongs to the nginx user.

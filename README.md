@@ -1352,6 +1352,35 @@ any restart, and a rolling update of the service covers a permanent change.
 
 ## Without Compose: plain `docker run`
 
+### One certificate, then stop: `new`
+
+No stack, no Compose file: `new` issues one certificate into `/data`, prints
+where it is, and stops. Ports 80 and 443 must be free on this host and
+reachable from the internet; mount `/data` to keep the result.
+
+```bash
+docker run --rm -p 80:80 -p 443:443 -v nginx-cert-data:/data \
+  rac021/nginx-cert:v2 new --domain app.example.com --email you@example.com \
+  --challenge tls-alpn-01 --staging
+```
+
+| Option | Variable it sets | Values |
+|---|---|---|
+| `--domain`, `-d` | `CERT_DOMAINS` | a name; repeat it for more names in the same certificate (required) |
+| `--email` | `CERT_EMAIL` | the ACME account address |
+| `--challenge` | `CERT_CHALLENGE` | `http-01` (port 80), `tls-alpn-01` (port 443), `dns-01` |
+| `--provider` | `CERT_PROVIDER` | `letsencrypt`, `zerossl`, `actalis`, `google`, `harica` … (`certme providers`) |
+| `--staging` | `CERT_STAGING=true` | the authority's test environment |
+| `--key-type` | `CERT_KEY_TYPE` | `ec-256` (default), `ec-384`, `2048`, `3072`, `4096` |
+| `--dns` | `CERT_DNS_PROVIDER` | the acme.sh DNS module for `dns-01` (`dns_cf` …) |
+| `--force` | `CERT_FORCE_RENEW=true` | issue even if `/data` already holds a valid one |
+| `--fallback-selfsigned` | `CERT_FALLBACK_SELFSIGNED=true` | self-signed when no authority delivers; off by default, so the command fails instead |
+
+Secrets are never options, since an argument shows in `ps`: pass EAB or API
+keys with `-e` or `--env-file`. Exit code `0` when a certificate was issued,
+`3` when no authority delivered (no path is printed then), `2` for a wrong
+option. `docker run --rm rac021/nginx-cert:v2 help` lists all of this.
+
 Every example above has a one-command equivalent. Three things are not optional:
 
 - **`-v nginx-cert-data:/data`** — without it, certificates and the ACME account
@@ -1672,6 +1701,8 @@ docker logs -f nginx-cert                     # everything, timestamped
 ```
 docker exec <container> certme <command>
 docker exec <container> help          # every command, examples, and what is good to know
+docker run --rm rac021/nginx-cert:v2 new --domain app.example.com --email you@example.com
+                                      # one certificate, then stop (see "One certificate, then stop")
 ```
 
 The ones you need day to day:

@@ -30,6 +30,7 @@ NC_NGINX_PID=''
 NC_SCHED_PID=''
 NC_SLEEP_PID=''
 NC_ISSUE_PID=''
+NC_ONE_SHOT=0
 
 # --- Signals ---------------------------------------------------------------
 on_signal() {
@@ -124,6 +125,25 @@ supervise() {
   return 0
 }
 
+# --- One-shot (`new`) -------------------------------------------------------
+# Where the certificate is, then a graceful stop: the exit code is the issuance's.
+one_shot_report() {
+  local rc=$1 name
+  log::section "Result"
+  "${NC_ROOT}/bin/certme" status || true
+  if ((rc)); then
+    # The startup placeholder is still on disk: no path, it is not the result.
+    log::warn "No certificate was issued (exit ${rc}): the reason is above."
+  else
+    for name in "${NC_SPEC_NAMES[@]}"; do
+      log::kv "Certificate" "$(config::fullchain_path "$name")"
+      log::kv "Private key" "$(config::privkey_path "$name")"
+    done
+  fi
+  nginx::quit
+  return "$rc"
+}
+
 # --- Startup ---------------------------------------------------------------
 main() {
   # Allows "docker run <image> certme status", or replacing the command
@@ -131,6 +151,11 @@ main() {
   if (($#)); then
     case $1 in
       serve) shift ;;
+      new)
+        # One-shot: issue, report, stop. Same boot as serve, minus the scheduler.
+        shift
+        cli::new_to_env "$@" || exit "$EX_CONFIG"
+        NC_ONE_SHOT=1 ;;
       certme) shift; exec "${NC_ROOT}/bin/certme" "$@" ;;
       *)
         command -v "$1" >/dev/null 2>&1 && exec "$@"
@@ -139,7 +164,7 @@ main() {
         # habit MIGRATION.md warns about -- silently did something else
         # entirely.
         log::die "$EX_CONFIG" \
-          "Unknown command '$1'. Use 'serve' (the default), 'certme <command>' -- for example 'certme renew' -- or the path to an executable."
+          "Unknown command '$1'. Use 'serve' (the default), 'new --domain <name> ...', 'certme <command>' -- for example 'certme renew' -- 'help', or the path to an executable."
         ;;
     esac
   fi
@@ -177,6 +202,7 @@ main() {
     wait "$NC_ISSUE_PID" || issue_rc=$?
     NC_ISSUE_PID=''
     ((NC_SHUTTING_DOWN)) && return 0
+    ((NC_ONE_SHOT)) && { one_shot_report "$issue_rc"; return; }
     ((issue_rc)) && log::warn "Some certificates could not be obtained; the service starts anyway."
   fi
 

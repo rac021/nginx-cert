@@ -30,6 +30,34 @@ EVERYDAY
     certme providers                Authorities, and which ones your credentials
                                     unlock.
 
+ONE-SHOT: A CERTIFICATE WITH docker run, NO STACK NEEDED
+    Issues one certificate into /data, prints where it is, then stops. Ports 80
+    and 443 must be free here and reachable from the internet; mount /data to
+    keep the result.
+
+    docker run --rm -p 80:80 -p 443:443 -v nginx-cert-data:/data \
+      rac021/nginx-cert:v2 new --domain app.example.com --email you@example.com \
+      --challenge tls-alpn-01 --staging
+
+    --domain, -d NAME       Name to certify; repeat it for more names in the
+                            same certificate. Required.
+    --email ADDRESS         ACME account address; required by public authorities.
+    --challenge METHOD      http-01 (port 80) | tls-alpn-01 (port 443) | dns-01.
+    --provider ID           letsencrypt | zerossl | actalis | google | harica ...
+                            (see "certme providers"). Default: Let's Encrypt
+                            first, then the others your credentials unlock.
+    --staging               The authority's test environment: untrusted
+                            certificates, high quotas. Use it first.
+    --key-type TYPE         ec-256 (default) | ec-384 | 2048 | 3072 | 4096.
+    --dns MODULE            acme.sh DNS module for dns-01 (dns_cf, dns_ovh ...);
+                            its credentials go in -e, like any secret.
+    --force                 Issue even if /data already holds a valid one.
+    --fallback-selfsigned   Write a self-signed certificate when no authority
+                            delivers (off: the command fails instead).
+    Secrets are never options -- they would show in ps: pass them with -e,
+    e.g. -e CERT_EAB_KID=... -e CERT_EAB_HMAC_KEY=...
+    Exit code 0: issued; 3: no authority delivered; 2: a wrong option.
+
 COMMANDS
     issue [name...]     Issue or renew the certificates that need it.
                         With no argument: every declared certificate.

@@ -4,6 +4,16 @@ All notable changes to this project are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- **`new`: one certificate with `docker run`, then stop.** `--domain`,
+  `--email`, `--challenge`, `--provider`, `--staging`, `--key-type`, `--dns`,
+  `--force`, `--fallback-selfsigned` -- each sets the `CERT_*` variable of the
+  same meaning. The exit code is the issuance's; no self-signed fallback unless
+  asked for. Described by `help`.
+
 ## [2.6.0] - 2026-10-16
 
 ### Added

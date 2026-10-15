@@ -753,6 +753,25 @@ else
   ko 'and says which file to include' "$(tail -3 <<<"$out")"
 fi
 
+# -- Scenario 23: `new`, a certificate with docker run and nothing else -------
+#
+# One-shot: the same boot, the issuance, a report, a graceful stop. An internal
+# name keeps it offline; the exit code is the issuance's.
+out=$(docker run --rm --network none "$IMAGE" new --domain oneshot.test --email a@b.co 2>&1); rc=$?
+check '`new` issues, reports and exits 0' '0' "$rc"
+if [[ $out == *'/data/certs/oneshot.test/fullchain.pem'* && $out == *'nginx stopped cleanly'* ]]; then
+  ok 'and names the certificate file before a clean stop'
+else
+  ko 'and names the certificate file before a clean stop' "$(tail -5 <<<"$out")"
+fi
+out=$(docker run --rm --network none "$IMAGE" new --email a@b.co 2>&1); rc=$?
+check '`new` without --domain exits with code 2' '2' "$rc"
+if [[ $out == *'--domain is required'* ]]; then
+  ok 'and says which option is missing'
+else
+  ko 'and says which option is missing' "$out"
+fi
+
 # -- Result ------------------------------------------------------------------
 printf '\n  %d passed, %d failed\n' "$PASSED" "$FAILED"
 ((FAILED == 0))

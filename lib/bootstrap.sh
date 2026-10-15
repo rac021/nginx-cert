@@ -30,6 +30,8 @@ source "${NC_ROOT}/lib/template.sh"
 source "${NC_ROOT}/lib/lock.sh"
 # shellcheck source=providers/registry.sh
 source "${NC_ROOT}/providers/registry.sh"
+# shellcheck source=lib/cli.sh
+source "${NC_ROOT}/lib/cli.sh"
 # shellcheck source=lib/config.sh
 source "${NC_ROOT}/lib/config.sh"
 # shellcheck source=lib/certs.sh

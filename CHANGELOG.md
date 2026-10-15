@@ -6,6 +6,14 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+### Fixed
+
+- **`CERT_RENEW_DAYS` now decides alone when to renew.** It was also passed to
+  acme.sh as `--days`, which acme.sh counts from issuance: a 6-day certificate
+  under a 30-day threshold was never renewed.
+- **The unit test runner counted only the last assertion of each test**, so a
+  failed assertion followed by a passing one went unnoticed.
+
 ### Added
 
 - **`CERT_CHALLENGE=tls-alpn-01`**, for networks that filter the HTTP-01

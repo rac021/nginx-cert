@@ -21,6 +21,7 @@ if [[ -t 1 && -z ${NO_COLOR:-} ]]; then
 fi
 
 fail() {
+  _T_FAILED=1
   printf '%s  [FAIL] %s%s\n' "$_t_red" "$CURRENT_TEST" "$_t_reset" >&2
   local line
   while IFS= read -r line; do printf '         %s\n' "$line" >&2; done <<<"$1"
@@ -95,7 +96,9 @@ run_tests_in_file() {
     CURRENT_TEST=${fn#test_}
     CURRENT_TEST=${CURRENT_TEST//_/ }
     TESTS_RUN=$((TESTS_RUN + 1))
-    if ( set -e; "$fn" ); then
+    # "set -e" is ignored inside an "if" condition: only the last assertion
+    # decided. _T_FAILED records every failed assertion of the test.
+    if ( _T_FAILED=0; "$fn" && ((_T_FAILED == 0)) ); then
       printf '%s  [ ok ] %s%s\n' "$_t_green" "$CURRENT_TEST" "$_t_reset"
     else
       TESTS_FAILED=$((TESTS_FAILED + 1))

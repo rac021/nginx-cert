@@ -159,6 +159,14 @@ else
   ko 'renewal: threshold, interval and jitter are all applied' "$out"
 fi
 
+printf '\n  -- the challenge reaches the configuration --\n'
+out=$(run_with_env_of examples/compose.tls-alpn.yml certme config)
+if [[ $out == *'tls-alpn-01 (port 443)'* && $out == *'challenge=http-01'* ]]; then
+  ok 'tls-alpn: the default challenge, and one line that keeps http-01'
+else
+  ko 'tls-alpn: the default challenge, and one line that keeps http-01' "$out"
+fi
+
 printf '\n  -- per-line options reach the configuration --\n'
 out=$(run_with_env_of examples/compose.multisite.yml certme config)
 if [[ $out == *'grafana:3000'* && $out == *'api:3000'* ]]; then

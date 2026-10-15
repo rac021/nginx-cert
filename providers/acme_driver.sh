@@ -174,16 +174,27 @@ acme::issue() {
   fi
 
   log::warn "$(acme::_authority_label "$provider") failed for '${name}' (exit ${rc})."
-  acme::_explain_failure "$provider" "$out"
+  acme::_explain_failure "$provider" "$out" "$challenge"
   return 1
 }
 
 # Translate the most common ACME errors into actionable advice. Without this
 # the user only sees several hundred lines of acme.sh trace and no idea what to
 # fix.
+# The other inbound challenge, when the one that failed was a validation by
+# connection: HTTP-01 on port 80, TLS-ALPN-01 on port 443. Networks often
+# filter one and not the other.
+acme::_other_challenge_hint() {   # $1 challenge that failed
+  case $1 in
+    http-01)     printf 'The port-80 validation failed: CERT_CHALLENGE=tls-alpn-01 validates on port 443 instead (not for a wildcard).' ;;
+    tls-alpn-01) printf 'The port-443 validation failed: CERT_CHALLENGE=http-01 validates on port 80 instead.' ;;
+  esac
+}
+
 acme::_explain_failure() {
-  local provider=$1 out=$2
-  local hint=''
+  local provider=$1 out=$2 challenge=${3:-http-01}
+  local hint='' port=80
+  [[ $challenge == tls-alpn-01 ]] && port=443
 
   case $out in
     *'invalidContact'*|*'forbidden domain'*)
@@ -204,7 +215,7 @@ acme::_explain_failure() {
     curl -A \"Mozilla/5.0 (compatible; Let's Encrypt validation server; +https://www.letsencrypt.org)\" http://<your-domain>/.well-known/acme-challenge/test
   If that hangs while a plain curl returns 404, the appliance is matching the authority's User-Agent. Three ways out: have /.well-known/acme-challenge/ exempted from inspection, try another authority (such a rule is usually specific to one), or use CERT_CHALLENGE=dns-01, which needs no inbound connection at all." ;;
     *'Connection refused'*|*'connection timed out'*|*'Timeout during connect'*)
-      hint="Nothing accepted the connection on port 80. Publish it (-p 80:80), and make sure no upstream firewall drops it. The authority always validates over port 80, even for an HTTPS-only site." ;;
+      hint="Nothing accepted the connection on port ${port}. Publish it (-p ${port}:${port}), and make sure no upstream firewall drops it." ;;
     # "unauthorized" means two entirely different things depending on the stage
     # it comes from, and the remedies have nothing in common. Registration
     # errors must therefore be matched first: pointing someone at their
@@ -228,6 +239,13 @@ acme::_explain_failure() {
   esac
 
   [[ -n $hint ]] && log::detail warn "$hint"
+
+  # A validation that never reached us, not a name that does not resolve:
+  # the other challenge goes through another port.
+  if [[ $out == *'Verification error'* && $out != *'DNS problem'* && $out != *'NXDOMAIN'* ]]; then
+    local other; other=$(acme::_other_challenge_hint "$challenge")
+    [[ -n $other ]] && log::detail warn "$other"
+  fi
 
   # The full trace stays available without polluting the nominal output.
   if log::enabled debug; then

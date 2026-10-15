@@ -12,7 +12,7 @@
 
 _hint_for() {
   CFG_ACME_HOME="${TEST_TMPDIR}/acme"
-  NC_LOG_LEVEL=warn acme::_explain_failure "${2:-letsencrypt}" "$1" 2>&1
+  NC_LOG_LEVEL=warn acme::_explain_failure "${2:-letsencrypt}" "$1" "${3:-http-01}" 2>&1
 }
 
 # The case that cost a real afternoon: a filtering appliance accepted the TCP
@@ -102,4 +102,30 @@ test_still_points_at_the_network_for_a_validation_failure() {
   local out
   out=$(_hint_for 'preprod.example.com: Invalid status. Verification error details: urn:ietf:params:acme:error:unauthorized')
   assert_contains "$out" 'port 80'
+}
+
+# --- The other challenge ------------------------------------------------------
+#
+# dev and preprod: the network resets HTTP-01 and lets TLS-ALPN-01 through.
+# The failure has to say there is another door, not only why this one is shut.
+
+test_a_failed_http_01_validation_points_to_tls_alpn_01() {
+  local out; out=$(_hint_for "dev.example.com: Invalid status. Verification error details: 203.0.113.10: Fetching http://dev.example.com/.well-known/acme-challenge/xyz: Connection reset by peer" letsencrypt http-01)
+  assert_contains "$out" 'CERT_CHALLENGE=tls-alpn-01 validates on port 443'
+}
+
+test_a_failed_tls_alpn_01_validation_points_to_http_01() {
+  local out; out=$(_hint_for "ola.example.com: Invalid status. Verification error details: 203.0.113.10: Timeout during connect (likely firewall problem)" letsencrypt tls-alpn-01)
+  assert_contains "$out" 'CERT_CHALLENGE=http-01 validates on port 80' &&
+    assert_contains "$out" 'port 443. Publish it (-p 443:443)'
+}
+
+test_a_name_that_does_not_resolve_suggests_no_other_challenge() {
+  local out; out=$(_hint_for "x.example.com: Invalid status. Verification error details: DNS problem: NXDOMAIN looking up A for x.example.com" letsencrypt http-01)
+  assert_not_contains "$out" 'CERT_CHALLENGE='
+}
+
+test_a_failure_outside_validation_suggests_no_other_challenge() {
+  local out; out=$(_hint_for 'urn:ietf:params:acme:error:rateLimited: too many certificates already issued' letsencrypt http-01)
+  assert_not_contains "$out" 'CERT_CHALLENGE='
 }

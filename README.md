@@ -71,7 +71,7 @@ who prefers the unprefixed convention.
   - [Tuning the fallback chain](#tuning-the-fallback-chain)
   - [Adding an authority](#adding-an-authority)
 - [More complete examples](#more-complete-examples)
-  - [Port 80 filtered: TLS-ALPN-01](#port-80-filtered-tls-alpn-01)
+  - [Choosing the validation challenge](#choosing-the-validation-challenge)
   - [Wildcard certificate (DNS-01)](#wildcard-certificate-dns-01)
   - [IP-address certificates](#ip-address-certificates)
   - [Local development](#local-development)
@@ -461,7 +461,7 @@ See [Renewal](#renewal) for how these interact and for worked examples.
 | Variable | Default | Description |
 |---|---|---|
 | `CERT_KEY_TYPE` | `ec-256` | `ec-256`, `ec-384`, `ec-521`, `2048`, `3072`, `4096`. |
-| `CERT_CHALLENGE` | `auto` | `auto`, `http-01`, `dns-01`, `tls-alpn-01`. `auto` picks DNS-01 for wildcards, HTTP-01 otherwise. See [Port 80 filtered: TLS-ALPN-01](#port-80-filtered-tls-alpn-01). |
+| `CERT_CHALLENGE` | `auto` | `auto`, `http-01`, `dns-01`, `tls-alpn-01`. `auto` picks DNS-01 for wildcards, HTTP-01 otherwise. See [Choosing the validation challenge](#choosing-the-validation-challenge). |
 | `CERT_DNS_PROVIDER` | — | acme.sh DNS module for DNS-01 (`dns_cf`, `dns_ovh`, …). |
 | `CERT_DNS_SLEEP` | — | Fixed wait for DNS propagation (`20`, `45s`, `2m`). Left unset, acme.sh polls for propagation instead, which is faster and more reliable. |
 | `CERT_PROFILE` | — | Certificate profile requested from the authority. |
@@ -867,21 +867,64 @@ Columns: id, label, acme.sh alias (or `-` for a raw URL), directory URL, EAB
 
 ## More complete examples
 
-### Port 80 filtered: TLS-ALPN-01
+### Choosing the validation challenge
 
-Some networks drop the HTTP-01 validation itself — an appliance matching the
-authority's request on `/.well-known/acme-challenge/` — while port 443 is open.
-The authority then reports `Connection reset by peer` and only the local
-certificate is ever installed. TLS-ALPN-01 (RFC 8737) validates on port 443
-instead, inside the TLS handshake.
+The authority proves that you control the name before it signs. Three ways,
+chosen with `CERT_CHALLENGE` (or `challenge=` on one line of `CERT_DOMAINS`):
+
+| `CERT_CHALLENGE` | The authority connects to | Needs | Wildcard | IP address |
+|---|---|---|---|---|
+| `http-01` (`http`) | port **80**, `/.well-known/acme-challenge/` | port 80 reachable from the internet | no | yes |
+| `tls-alpn-01` (`alpn`) | port **443**, inside the TLS handshake | port 443 reachable from the internet | no | yes |
+| `dns-01` (`dns`) | nothing: it reads a TXT record | `CERT_DNS_PROVIDER` and its API credentials | **yes** | no |
+| `auto` (default) | `dns-01` for a wildcard, `http-01` otherwise | | | |
+
+**Which one.** `http-01` when port 80 is open. `tls-alpn-01` when port 80 is
+closed or filtered but 443 is open — no credentials to manage. `dns-01` for a
+wildcard, or when the server is not reachable from the internet at all.
+
+**Setting it.** For every certificate, or for one line only:
 
 ```yaml
-CERT_DOMAINS: app.example.com | upstream=app:8080
-CERT_CHALLENGE: tls-alpn-01        # or per certificate: challenge=alpn
+CERT_CHALLENGE: tls-alpn-01
+CERT_DOMAINS: |
+  app.example.com   | upstream=app:8080
+  legacy.example.com | upstream=old:8080 challenge=http-01
 ```
 
-nginx keeps serving the HTTPS port. In front of the HTTPS servers it reads the
-ALPN list of each handshake, without decrypting anything:
+```bash
+docker run -d --name nginx-cert -p 80:80 -p 443:443 -v nginx-cert-data:/data \
+           -e CERT_EMAIL=you@example.com -e CERT_DOMAINS=app.example.com \
+           -e CERT_UPSTREAM=app:8080 -e CERT_CHALLENGE=tls-alpn-01 rac021/nginx-cert:v2
+```
+
+Complete file: [`examples/compose.tls-alpn.yml`](examples/compose.tls-alpn.yml).
+`certme config` (and the startup summary) shows what is in effect:
+
+```
+   Challenge                  tls-alpn-01 (port 443)
+   ...
+   legacy.example.com         legacy.example.com  [fqdn] challenge=http-01 -> app:8080
+```
+
+Changing the challenge means recreating the container (the environment is
+fixed at creation); the next run requests the certificate on its own.
+
+**When it fails, the log says which door to try next.** A validation that the
+authority could not complete is followed by the other inbound challenge:
+
+```
+[warn] Let's Encrypt failed for 'app.example.com' (exit 1).
+       -> Nothing accepted the connection on port 80. Publish it (-p 80:80), and make sure no upstream firewall drops it.
+       -> The port-80 validation failed: CERT_CHALLENGE=tls-alpn-01 validates on port 443 instead (not for a wildcard).
+```
+
+and the reverse after a failed `tls-alpn-01`. A name that does not resolve, a
+quota or an account error suggests nothing: another challenge would not help.
+
+**How TLS-ALPN-01 shares port 443.** nginx keeps serving the HTTPS port. In
+front of the HTTPS servers it reads the ALPN list of each handshake, without
+decrypting anything:
 
 | ALPN offered | Goes to |
 |---|---|
@@ -1079,6 +1122,7 @@ server {
 |---|---|
 | Single site, Let's Encrypt | [`docker-compose.yml`](docker-compose.yml) |
 | Actalis | [`examples/compose.actalis.yml`](examples/compose.actalis.yml) |
+| Port 80 closed or filtered: TLS-ALPN-01 | [`examples/compose.tls-alpn.yml`](examples/compose.tls-alpn.yml) |
 | HARICA / GÉANT TCS | [`examples/compose.harica.yml`](examples/compose.harica.yml) |
 | ZeroSSL | [`examples/compose.zerossl.yml`](examples/compose.zerossl.yml) |
 | Several authorities at once | [`examples/compose.multi-ca.yml`](examples/compose.multi-ca.yml) |
@@ -1312,8 +1356,9 @@ Every example above has a one-command equivalent. Three things are not optional:
 - **`-v nginx-cert-data:/data`** — without it, certificates and the ACME account
   key live in the container layer and are re-requested on every recreate, which
   exhausts the authority's rate limit within days.
-- **`-p 80:80`** — the authority connects to port 80 to validate the challenge,
-  even for a site that only serves HTTPS.
+- **`-p 80:80`** — the authority connects to port 80 to validate the challenge
+  (HTTP-01, the default), even for a site that only serves HTTPS. With
+  `CERT_CHALLENGE=tls-alpn-01` it connects to 443 instead.
 - **`-e CERT_EMAIL`** — a real address; authorities reject `example.com`.
 
 Do not add `-e CERT_FORCE_RENEW=true` to a long-lived container: it re-issues on
@@ -1802,6 +1847,12 @@ instead of refusing to start, and recovers on its own once it is back. Check
 that the backend is listening, and that both containers share a **user-defined**
 network — the default bridge provides no name resolution, so `app:8080` will
 never resolve there.
+
+**`Connection reset by peer` or `Timeout during connect` during validation.**
+The authority's connection never completed: a closed port, or a firewall
+filtering the validation. Switch to the other inbound challenge — the log line
+after the error names it — or to `dns-01`. See
+[Choosing the validation challenge](#choosing-the-validation-challenge).
 
 **Wildcard certificate not issued.**
 Wildcards require DNS-01. Set `CERT_DNS_PROVIDER` and your DNS provider's API

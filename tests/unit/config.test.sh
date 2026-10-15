@@ -481,3 +481,12 @@ test_the_front_is_needed_only_when_a_certificate_uses_tls_alpn_01() {
   assert_ok config::tls_alpn_front &&
     { _parse 'a.example.com'; assert_fails config::tls_alpn_front; }
 }
+
+test_the_summary_names_the_challenge_and_its_port() {
+  local out
+  out=$( _load_config CERT_EMAIL=a@b.com CERT_CHALLENGE=tls-alpn-01 \
+           "CERT_DOMAINS=$(printf 'app.example.com\nlegacy.example.com | challenge=http-01')" >/dev/null 2>&1
+         NC_LOG_LEVEL=info config::summary 2>&1 )
+  assert_contains "$out" 'tls-alpn-01 (port 443)' &&
+    assert_contains "$out" 'challenge=http-01'
+}

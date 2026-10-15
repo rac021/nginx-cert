@@ -625,6 +625,7 @@ config::summary() {
   fi
   log::kv "Account e-mail"         "${CFG_EMAIL:-(unset)}"
   log::kv "Key type"               "$CFG_KEY_TYPE"
+  log::kv "Challenge"              "$(config::describe_challenge "$CFG_CHALLENGE")"
   log::kv "Renewal"                "at D-${CFG_RENEW_DAYS} before expiry, checked every $(util::human_duration "$CFG_RENEW_INTERVAL_S") (+/-$(util::human_duration "$CFG_RENEW_JITTER_S"))"
   log::kv "TLS policy"             "$CFG_SSL_POLICY"
   log::kv "Data directory"         "$CFG_DATA_DIR"
@@ -648,8 +649,19 @@ config::describe_spec() {
   local desc="${NC_SPEC_DOMAINS[$name]}"
   desc+="  [${NC_SPEC_KIND[$name]}]"
   [[ ${NC_SPEC_PROVIDER[$name]} != "$CFG_PROVIDER" ]] && desc+=" provider=${NC_SPEC_PROVIDER[$name]}"
+  [[ ${NC_SPEC_CHALLENGE[$name]} != "$CFG_CHALLENGE" ]] && desc+=" challenge=${NC_SPEC_CHALLENGE[$name]}"
   [[ -n ${NC_SPEC_UPSTREAM[$name]} ]] && desc+=" -> ${NC_SPEC_UPSTREAM[$name]}"
   printf '%s' "$desc"
+}
+
+# The challenge and what the authority connects to, as the operator checks it.
+config::describe_challenge() {
+  case $1 in
+    http-01|http)     printf '%s (port 80)' "$1" ;;
+    tls-alpn-01|alpn) printf '%s (port 443)' "$1" ;;
+    dns-01|dns)       printf '%s (TXT record, no inbound connection)' "$1" ;;
+    *)                printf '%s (dns-01 for a wildcard, http-01 otherwise)' "$1" ;;
+  esac
 }
 
 # Paths to a certificate's artefacts.

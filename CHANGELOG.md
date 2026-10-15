@@ -4,6 +4,16 @@ All notable changes to this project are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Changed
+
+- **A failed validation names the other challenge.** After HTTP-01 fails to
+  reach the server, the log suggests `CERT_CHALLENGE=tls-alpn-01` (port 443),
+  and the reverse; the "nothing accepted the connection" hint names the port of
+  the challenge in use instead of always port 80. Documented in "Choosing the
+  validation challenge", with `examples/compose.tls-alpn.yml`.
+
 ## [2.4.0] - 2026-10-15
 
 ### Fixed

@@ -1,0 +1,42 @@
+# Port 80 closed or filtered: validate on port 443 (TLS-ALPN-01, RFC 8737).
+#
+# Use it when the authority's HTTP-01 request never completes -- "Connection
+# reset by peer" or "Timeout during connect" in the log -- while port 443 is
+# reachable from the internet. No credentials, unlike DNS-01; no wildcard.
+#
+# nginx keeps serving port 443: it reads the ALPN list of each handshake and
+# sends "acme-tls/1" (never offered by a browser) to acme.sh on the loopback,
+# during a validation only. Everything else reaches the site as before, with
+# the client address preserved.
+#
+#   docker compose -f examples/compose.tls-alpn.yml up -d
+#   docker compose -f examples/compose.tls-alpn.yml exec nginx-cert certme status
+
+services:
+  nginx-cert:
+    image: rac021/nginx-cert:v2
+    restart: unless-stopped
+    # 80 stays published: it redirects to HTTPS, and serves HTTP-01 for any
+    # line that asks for it.
+    ports: ["80:80", "443:443"]
+    environment:
+      CERT_EMAIL: ops@example.com
+      # The default for every certificate below.
+      CERT_CHALLENGE: tls-alpn-01
+      CERT_DOMAINS: |
+        app.example.com    | upstream=app:8080
+        # One line can keep another challenge.
+        legacy.example.com | upstream=app:8080 challenge=http-01
+      # Test against the staging environment first: untrusted certificates,
+      # high quotas. Remove once the first certificate is issued.
+      CERT_STAGING: "true"
+    volumes:
+      - nginx-cert-data:/data
+
+  app:
+    image: traefik/whoami
+    command: --port=8080
+    expose: ["8080"]
+
+volumes:
+  nginx-cert-data:

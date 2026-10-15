@@ -128,14 +128,14 @@ issue::_provider_label() {
   esac
 }
 
-# Dispatch to the right driver. Returns 0 success, 2 nothing to do, 1 failure.
+# Dispatch to the right driver. Returns 0 success, 1 failure.
 issue::_call_provider() {
-  local provider=$1 name=$2 staging_dir=$3 force=$4; shift 4
+  local provider=$1 name=$2 staging_dir=$3; shift 3
   local -a domains=("$@")
   case $provider in
     selfsigned)   selfsigned::issue "$name" "$staging_dir" "${domains[@]}" ;;
     zerossl-rest) zerossl_rest::issue "$name" "$staging_dir" "${domains[@]}" ;;
-    *)            acme::issue "$name" "$provider" "$staging_dir" "$force" "${domains[@]}" ;;
+    *)            acme::issue "$name" "$provider" "$staging_dir" "${domains[@]}" ;;
   esac
 }
 
@@ -234,11 +234,6 @@ issue::one() {
   fi
   log::debug "Authority chain for '${name}': ${chain[*]}"
 
-  # acme.sh keeps its own bookkeeping and skips what it believes is not due.
-  # We override it whenever our reason for renewing is one it cannot see.
-  local force=0
-  { util::is_true "${CFG_FORCE_RENEW:-false}" || certs::needs_forced_renewal "$name"; } && force=1
-
   # Tracks whether any real authority refused during this run. The local
   # rescue that may follow always succeeds, and it used to clear the failure
   # counter with it -- so the documented quota protection never engaged at all
@@ -261,7 +256,7 @@ issue::one() {
       ((max_attempts > 1)) && log::detail info "Attempt ${attempt}/${max_attempts} with $(issue::_provider_label "$provider")."
 
       rc=0
-      issue::_call_provider "$provider" "$name" "$staging_dir" "$force" "${domains[@]}" || rc=$?
+      issue::_call_provider "$provider" "$name" "$staging_dir" "${domains[@]}" || rc=$?
 
       if ((rc == 0)); then
         if certs::install "$name" "$staging_dir"; then
@@ -286,11 +281,6 @@ issue::one() {
         log::detail error "The certificate returned by $(issue::_provider_label "$provider") failed verification and was discarded."
         rm -rf "$staging_dir"
         rc=1
-      elif ((rc == 2)); then
-        rm -rf "$staging_dir"
-        issue::_clear_failure "$name"
-        NC_SKIPPED+=("$name")
-        return 2
       else
         rm -rf "$staging_dir"
       fi

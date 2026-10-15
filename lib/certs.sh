@@ -139,9 +139,6 @@ certs::recorded_provider() {
 #   - CERT_FORCE_RENEW is set.
 
 # Does the certificate in place cover every requested name?
-#
-# Shared with certs::needs_forced_renewal so the two can never disagree about
-# what "covers" means.
 certs::covers_requested() {
   local name=$1
   local -a want=(); read -r -a want <<<"${NC_SPEC_DOMAINS[$name]:-}"
@@ -158,26 +155,6 @@ certs::covers_requested() {
 certs::_wants_staging() {
   local name=$1
   util::is_true "${NC_SPEC_STAGING[$name]:-${CFG_STAGING:-false}}"
-}
-
-# Must the ACME client be told to renew, rather than left to decide for itself?
-#
-# acme.sh keeps its own bookkeeping and skips a renewal it believes is not due.
-# That is right when our reason is "expires soon" -- we agree with it. It is
-# wrong when the reason has nothing to do with time: the requested names
-# changed, the certificate in place is self-signed, or we are leaving the
-# staging environment. Its stored copy looks perfectly fresh in all three
-# cases, so it answers "skip" and nothing happens -- which is why the
-# documented go-live flow (test against staging, then set CERT_STAGING=false)
-# never actually took effect.
-certs::needs_forced_renewal() {
-  local name=$1
-  certs::exists "$name"           || return 0
-  certs::is_selfsigned "$name"    && return 0
-  certs::covers_requested "$name" || return 0
-  local issued_by; issued_by=$(certs::recorded_provider "$name" 2>/dev/null || printf '')
-  [[ $issued_by == *-staging ]] && ! certs::_wants_staging "$name" && return 0
-  return 1
 }
 
 # Output: the reason, or an empty string when no renewal is required.

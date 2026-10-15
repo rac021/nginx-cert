@@ -195,47 +195,6 @@ test_a_per_certificate_staging_flag_is_not_compared_to_the_global_one() {
   assert_contains "$(certs::renewal_reason 'perline')" 'staging is now off'
 }
 
-# --- What the ACME client cannot decide for itself --------------------------
-
-test_forces_renewal_when_the_certificate_in_place_is_self_signed() {
-  local d; d=$(_mkdir_bundle force_ss)
-  _gen_bundle "$d" 'example.com'
-  _setup_spec 'force_ss' 'example.com'
-  NC_SPEC_STAGING=()
-  CFG_STATE_DIR="${TEST_TMPDIR}/state-force-ss"
-  assert_ok certs::needs_forced_renewal 'force_ss'
-}
-
-test_forces_renewal_when_a_domain_was_added() {
-  local d; d=$(_mkdir_bundle force_san)
-  _gen_ca_signed_bundle "$d" 'example.com' 90
-  _setup_spec 'force_san' 'example.com www.example.com'
-  NC_SPEC_STAGING=()
-  CFG_STATE_DIR="${TEST_TMPDIR}/state-force-san"
-  assert_ok certs::needs_forced_renewal 'force_san'
-}
-
-test_forces_renewal_when_leaving_staging() {
-  local d; d=$(_mkdir_bundle force_stg)
-  _gen_ca_signed_bundle "$d" 'example.com' 90
-  _setup_spec 'force_stg' 'example.com'
-  NC_SPEC_STAGING=(); CFG_STAGING=false
-  CFG_STATE_DIR="${TEST_TMPDIR}/state-force-stg"
-  certs::record_provider 'force_stg' 'letsencrypt-staging'
-  assert_ok certs::needs_forced_renewal 'force_stg'
-}
-
-test_leaves_a_merely_expiring_certificate_to_the_acme_client() {
-  local d; d=$(_mkdir_bundle force_exp)
-  _gen_ca_signed_bundle "$d" 'example.com' 90
-  _setup_spec 'force_exp' 'example.com'
-  NC_SPEC_STAGING=(); CFG_STAGING=false
-  CFG_STATE_DIR="${TEST_TMPDIR}/state-force-exp"
-  certs::record_provider 'force_exp' 'letsencrypt'
-  assert_fails certs::needs_forced_renewal 'force_exp' \
-    'we agree with acme.sh about time: no need to override it'
-}
-
 test_does_not_renew_a_production_certificate_on_the_staging_check() {
   local d; d=$(_mkdir_bundle prod)
   _gen_ca_signed_bundle "$d" 'example.com' 90

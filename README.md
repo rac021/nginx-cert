@@ -1086,9 +1086,10 @@ there needs attention, and anything watching the exit code has to hear about it.
 | `CERT_FAILURE_COOLDOWN_MAX` | `12h` | Ceiling for that backoff. |
 | `CERT_POST_HOOK` | — | Shell command run after a successful renewal. |
 
-`CERT_RENEW_DAYS` is also handed to the ACME client, so its own bookkeeping
-agrees with ours and no authority is contacted for a certificate that is not
-due.
+`CERT_RENEW_DAYS` is the only rule. nginx-cert contacts an authority once the
+threshold is crossed, and tells acme.sh to renew (`--force`): acme.sh counts its
+own schedule in days after issuance, which would hold back a short-lived
+certificate past its expiry.
 
 The check interval is not the renewal frequency. A 12-hour interval on a 30-day
 threshold means a certificate is renewed within twelve hours of crossing the

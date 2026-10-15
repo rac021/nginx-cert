@@ -13,9 +13,6 @@ readonly NC_PROVIDERS_ACME_SH=1
 
 NC_ACME_BIN="${NC_ACME_BIN:-/usr/local/bin/acme.sh}"
 
-# acme.sh exit code meaning "certificate is not due for renewal".
-readonly ACME_RENEW_SKIP=2
-
 acme::available() { [[ -x $NC_ACME_BIN ]]; }
 
 # How to name the authority in messages.
@@ -51,12 +48,14 @@ acme::_profile_for() {
 
 # Issue or renew a certificate.
 #
-# usage: acme::issue <name> <provider_id> <output_dir> <force:0|1> <domain...>
+# usage: acme::issue <name> <provider_id> <output_dir> <domain...>
 # returns: 0 = certificate written to the output directory
-#          2 = nothing to do, the current certificate is still valid
 #          1 = failure
+#
+# Always --force: certs::renewal_reason alone decides when to renew. acme.sh
+# counts its own schedule in days after issuance, not before expiry.
 acme::issue() {
-  local name=$1 provider=$2 outdir=$3 force=$4; shift 4
+  local name=$1 provider=$2 outdir=$3; shift 3
   local -a domains=("$@")
 
   acme::available || { log::error "acme.sh not found (${NC_ACME_BIN})."; return 1; }
@@ -97,9 +96,9 @@ acme::issue() {
     --config-home "$CFG_ACME_HOME"
     --cert-home "${CFG_ACME_HOME}/certs"
     --log "${CFG_ACME_HOME}/acme.log"
+    --force
     --server "$server"
     --keylength "$key_type"
-    --days "${NC_SPEC_RENEW_DAYS[$name]:-$CFG_RENEW_DAYS}"
     --email "$CFG_EMAIL"
     --cert-file "${outdir}/cert.pem"
     --key-file "${outdir}/privkey.pem"
@@ -124,7 +123,6 @@ acme::issue() {
   [[ -n ${NC_EAB_KID:-} ]]  && cmd+=(--eab-kid "$NC_EAB_KID")
   [[ -n ${NC_EAB_HMAC:-} ]] && cmd+=(--eab-hmac-key "$NC_EAB_HMAC")
   [[ -n $profile ]] && cmd+=(--cert-profile "$profile")
-  ((force)) && cmd+=(--force)
   log::enabled debug && cmd+=(--debug)
 
   # Documented escape hatch: acme.sh options nginx-cert does not expose.
@@ -169,11 +167,6 @@ acme::issue() {
     log::ok "$(acme::_authority_label "$provider") issued certificate '${name}'."
     log::debug "$out"
     return 0
-  fi
-
-  if ((rc == ACME_RENEW_SKIP)); then
-    log::info "'${name}': certificate still valid at $(acme::_authority_label "$provider"), nothing to do."
-    return "$ACME_RENEW_SKIP"
   fi
 
   log::warn "$(acme::_authority_label "$provider") failed for '${name}' (exit ${rc})."

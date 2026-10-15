@@ -34,6 +34,11 @@ declare -A NC_SPEC_RENEW_DAYS=()
 
 readonly NC_SPEC_KEYS=(name provider upstream challenge dns key_type profile staging hsts redirect renew_days)
 
+# Loopback ports of the TLS-ALPN-01 front (see templates/stream.conf.tpl).
+readonly NC_TLS_BACKEND_PORT=10443      # the HTTPS servers
+readonly NC_ALPN_RESPONDER_PORT=10444   # acme.sh, during a validation only
+readonly NC_ALPN_RELAY_PORT=10445       # strips the PROXY protocol for acme.sh
+
 # Every CERT_* variable the program understands. Kept explicit rather than
 # derived, so an unknown variable can be reported instead of silently ignored:
 # a typo or a leftover setting from version 1 must not change behaviour without
@@ -418,8 +423,8 @@ config::validate() {
   esac
 
   case $CFG_CHALLENGE in
-    auto|http-01|http|dns-01|dns) ;;
-    *) log::die "$EX_CONFIG" "CERT_CHALLENGE='${CFG_CHALLENGE}': expected auto, http-01 or dns-01." ;;
+    auto|http-01|http|dns-01|dns|tls-alpn-01|alpn) ;;
+    *) log::die "$EX_CONFIG" "CERT_CHALLENGE='${CFG_CHALLENGE}': expected auto, http-01, dns-01 or tls-alpn-01." ;;
   esac
 
   case $CFG_KEY_TYPE in
@@ -503,9 +508,9 @@ config::validate() {
     fi
 
     case ${NC_SPEC_CHALLENGE[$name]} in
-      auto|http-01|http|dns-01|dns) ;;
+      auto|http-01|http|dns-01|dns|tls-alpn-01|alpn) ;;
       *) log::die "$EX_CONFIG" \
-           "CERT_DOMAINS: challenge='${NC_SPEC_CHALLENGE[$name]}' ('${name}'): expected auto, http-01 or dns-01." ;;
+           "CERT_DOMAINS: challenge='${NC_SPEC_CHALLENGE[$name]}' ('${name}'): expected auto, http-01, dns-01 or tls-alpn-01." ;;
     esac
 
     case ${NC_SPEC_KEY_TYPE[$name]} in
@@ -528,8 +533,10 @@ config::validate() {
 
     if [[ $kind == wildcard ]]; then
       local ch=${NC_SPEC_CHALLENGE[$name]}
-      [[ $ch == http-01 || $ch == http ]] && log::die "$EX_CONFIG" \
-        "'${name}' is a wildcard certificate: the HTTP-01 challenge is impossible, use challenge=dns-01."
+      case $ch in
+        http-01|http|tls-alpn-01|alpn) log::die "$EX_CONFIG" \
+          "'${name}' is a wildcard certificate: only the DNS-01 challenge can validate it, use challenge=dns-01." ;;
+      esac
       if [[ -z ${NC_SPEC_DNS[$name]} ]]; then
         log::warn "'${name}' is a wildcard but no DNS provider is configured (CERT_DNS_PROVIDER or dns=...): it will fall back to a self-signed certificate."
       fi
@@ -565,9 +572,30 @@ config::validate() {
     done
   done
 
+  if config::tls_alpn_front; then
+    case $CFG_HTTPS_PORT in
+      "$NC_TLS_BACKEND_PORT"|"$NC_ALPN_RESPONDER_PORT"|"$NC_ALPN_RELAY_PORT") log::die "$EX_CONFIG" \
+        "CERT_HTTPS_PORT=${CFG_HTTPS_PORT} is reserved by the TLS-ALPN-01 front (${NC_TLS_BACKEND_PORT}-${NC_ALPN_RELAY_PORT}): pick another port." ;;
+    esac
+    # The front carries the client address with the PROXY protocol; a load
+    # balancer in front would need to forward raw TCP and is not supported.
+    [[ -z $CFG_REAL_IP_FROM ]] || log::die "$EX_CONFIG" \
+      "CERT_REAL_IP_FROM cannot be combined with the TLS-ALPN-01 challenge: use http-01 or dns-01 behind a load balancer."
+  fi
+
   if util::is_true "$CFG_ENABLE" && ((${#NC_SPEC_NAMES[@]} == 0)); then
     log::warn "CERT_ENABLE is on but CERT_DOMAINS is empty: no certificate will be managed, nginx starts on its own."
   fi
+}
+
+# Does any certificate use TLS-ALPN-01? Then nginx listens on CERT_HTTPS_PORT
+# through the stream front, and the HTTPS servers on the loopback.
+config::tls_alpn_front() {
+  local name
+  for name in ${NC_SPEC_NAMES[@]+"${NC_SPEC_NAMES[@]}"}; do
+    case ${NC_SPEC_CHALLENGE[$name]} in tls-alpn-01|alpn) return 0 ;; esac
+  done
+  return 1
 }
 
 # --- Presentation ----------------------------------------------------------

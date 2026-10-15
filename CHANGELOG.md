@@ -4,6 +4,16 @@ All notable changes to this project are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- **`CERT_CHALLENGE=tls-alpn-01`**, for networks that filter the HTTP-01
+  validation on port 80. nginx routes the `acme-tls/1` handshakes of the HTTPS
+  port to acme.sh on the loopback, and everything else to the HTTPS servers
+  with the client address preserved. Measured against Let's Encrypt on a
+  network where HTTP-01 is reset.
+
 ## [2.3.0] - 2026-08-13
 
 ### Changed

@@ -120,3 +120,41 @@ test_no_placeholder_survives_rendering() {
   local out; out=$(_render_extras)
   assert_not_contains "$out" '%%'
 }
+
+# --- TLS-ALPN-01 front -----------------------------------------------------------
+
+_render_front() {   # $1 = challenge of the single certificate
+  _reset; _declare front.test 'front.test' true
+  NC_SPEC_CHALLENGE=(); NC_SPEC_CHALLENGE['front.test']=$1
+  NC_NGINX_SNIPPETS="${TEST_TMPDIR}/snippets-$$-${RANDOM}"
+  NC_NGINX_STREAM="${NC_NGINX_SNIPPETS}/stream.conf"
+  mkdir -p "$NC_NGINX_SNIPPETS"
+  nginx::_render_tls_front >/dev/null 2>&1 || return 1
+  cat "$NC_NGINX_STREAM" "${NC_NGINX_SNIPPETS}/nginx-cert-https-listen.conf"
+}
+
+test_without_tls_alpn_01_there_is_no_stream_and_https_listens_directly() {
+  local out; out=$(_render_front http-01)
+  assert_not_contains "$out" 'stream {' &&
+    assert_contains "$out" 'listen           443 ssl;'
+}
+
+test_tls_alpn_01_routes_only_acme_tls_1_to_the_responder() {
+  local out; out=$(_render_front tls-alpn-01)
+  assert_contains "$out" 'ssl_preread     on;' &&
+    assert_contains "$out" '~(^|,)acme-tls/1(,|$)  127.0.0.1:10445;' &&
+    assert_contains "$out" 'default                127.0.0.1:10443;' &&
+    assert_contains "$out" 'proxy_pass             127.0.0.1:10444;'
+}
+
+test_tls_alpn_01_moves_https_to_the_loopback_with_the_client_address() {
+  local out; out=$(_render_front tls-alpn-01)
+  assert_contains "$out" 'listen           127.0.0.1:10443 ssl proxy_protocol;' &&
+    assert_contains "$out" 'real_ip_header   proxy_protocol;' &&
+    assert_not_contains "$out" 'listen           443 ssl'
+}
+
+test_the_front_leaves_no_placeholder() {
+  local out; out=$(_render_front tls-alpn-01)
+  assert_not_contains "$out" '%%'
+}

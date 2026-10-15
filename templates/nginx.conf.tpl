@@ -23,6 +23,9 @@ events {
     multi_accept        on;
 }
 
+# TLS-ALPN-01 front on the HTTPS port; empty with the other challenges.
+include %%STREAM_CONF%%;
+
 http {
     include       /etc/nginx/mime.types;
     default_type  application/octet-stream;

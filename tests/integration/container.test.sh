@@ -687,6 +687,52 @@ out=$(docker run --rm --network none -e CERT_EMAIL='a@b.co' \
         -e CERT_DOMAINS='chain.test' -e CERT_PROVIDER_CHAIN='nope,nada' "$IMAGE" 2>&1); rc=$?
 check 'a chain naming no known authority exits with code 2' '2' "$rc"
 
+# -- Scenario 22: the TLS-ALPN-01 front on the HTTPS port -------------------
+#
+# Internal names never reach an authority, so this checks the front itself:
+# browsers still get the site, "acme-tls/1" gets nothing outside a validation,
+# and nginx logs the client address, not the loopback.
+cleanup
+docker run -d --name "$CONTAINER" -p "${HTTPS_PORT}:443" \
+  -e CERT_EMAIL='a@b.co' -e CERT_DOMAINS='alpn.test' -e CERT_CHALLENGE=tls-alpn-01 "$IMAGE" >/dev/null
+for _ in $(seq 1 40); do
+  docker logs "$CONTAINER" 2>&1 | grep -q 'nginx-cert is up' && break
+  sleep 1
+done
+check 'HTTPS is served through the front' '200' \
+  "$(curl -sk -o /dev/null -w '%{http_code}' --resolve "alpn.test:${HTTPS_PORT}:127.0.0.1" "https://alpn.test:${HTTPS_PORT}/")"
+# Captured first: with pipefail, grep -q closing the pipe early fails openssl.
+out=$(openssl s_client -connect "127.0.0.1:${HTTPS_PORT}" -servername alpn.test -alpn acme-tls/1 </dev/null 2>&1)
+if [[ $out == *'no peer certificate available'* ]]; then
+  ok 'acme-tls/1 gets no certificate outside a validation'
+else
+  ko 'acme-tls/1 gets no certificate outside a validation'
+fi
+client=$(docker logs "$CONTAINER" 2>/dev/null | grep -m1 '"GET / ' | cut -d' ' -f1)
+if [[ -n $client && $client != 127.0.0.1 ]]; then
+  ok 'nginx logs the client address, not the loopback'
+else
+  ko 'nginx logs the client address, not the loopback' "got '${client}'"
+fi
+
+# -- Scenario 22b: an nginx.conf that does not include the front -------------
+#
+# Nothing would listen on the HTTPS port and every validation would fail.
+cleanup
+userconf=$(mktemp)
+printf 'events {}\nhttp { include /etc/nginx/conf.d/*.conf; }\n' >"$userconf"
+chmod 644 "$userconf"
+out=$(docker run --rm --network none -e CERT_EMAIL='a@b.co' -e CERT_DOMAINS='alpn.test' \
+        -e CERT_CHALLENGE=tls-alpn-01 -e CERT_MANAGE_NGINX=false \
+        -v "${userconf}:/etc/nginx/nginx.conf:ro" "$IMAGE" 2>&1); rc=$?
+rm -f "$userconf"
+check 'a missing include of the front stops the container' '4' "$rc"
+if [[ $out == *'nginx-cert-stream.conf'* ]]; then
+  ok 'and says which file to include'
+else
+  ko 'and says which file to include' "$(tail -3 <<<"$out")"
+fi
+
 # -- Result ------------------------------------------------------------------
 printf '\n  %d passed, %d failed\n' "$PASSED" "$FAILED"
 ((FAILED == 0))

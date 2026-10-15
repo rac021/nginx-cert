@@ -276,14 +276,14 @@ test_an_automatic_chain_stays_quiet_about_skipped_candidates() {
 # certs::renewal_reason decides; acme.sh only executes. Its --days counts from
 # issuance, so a 6-day certificate under a 30-day threshold was never renewed.
 
-_acme_args() {
+_acme_args() {   # [challenge]
   _reset_providers
   local stub="${TEST_TMPDIR}/acme-stub.sh" args="${TEST_TMPDIR}/acme-args"
   rm -f "$args"
   printf '#!/bin/sh\nprintf "%%s\\n" "$@" > %q\n' "$args" >"$stub"
   chmod +x "$stub"
   NC_ACME_BIN=$stub CFG_ACME_HOME="${TEST_TMPDIR}/acme" CFG_WEBROOT="${TEST_TMPDIR}/www" \
-    CFG_ACME_SERVER='' CFG_KEY_TYPE=ec-256 CFG_CHALLENGE=http-01 CFG_EMAIL=ops@example.com \
+    CFG_ACME_SERVER='' CFG_KEY_TYPE=ec-256 CFG_CHALLENGE="${1:-http-01}" CFG_EMAIL=ops@example.com \
     CFG_PROFILE='' CFG_DNS_PROVIDER='' \
     acme::issue example.com letsencrypt "${TEST_TMPDIR}/out" example.com >/dev/null 2>&1
   cat "$args" 2>/dev/null || true
@@ -298,4 +298,11 @@ test_acme_sh_gets_no_schedule_of_its_own() {
   local args; args=$(_acme_args)
   assert_contains "$args" '--issue' 'acme.sh must have been called' &&
     assert_not_contains "$args" '--days'
+}
+
+test_tls_alpn_01_answers_on_the_loopback_only() {
+  local args
+  args=$(_acme_args tls-alpn-01)
+  assert_contains "$args" $'--alpn\n--tlsport\n10444\n--local-address\n127.0.0.1' &&
+    assert_not_contains "$args" '--webroot'
 }

@@ -454,3 +454,30 @@ test_the_summary_names_the_acme_directory_override() {
   assert_contains "$out" 'https://ca.internal/acme/directory'
   assert_contains "$out" 'CERT_ACME_SERVER'
 }
+
+# --- TLS-ALPN-01 ---------------------------------------------------------------
+
+test_accepts_the_tls_alpn_01_challenge_and_its_alias() {
+  assert_ok _load_config_fails CERT_EMAIL=a@b.com CERT_DOMAINS=example.com CERT_CHALLENGE=tls-alpn-01 &&
+    assert_ok _load_config_fails CERT_EMAIL=a@b.com "CERT_DOMAINS=example.com | challenge=alpn"
+}
+
+test_a_wildcard_cannot_use_tls_alpn_01() {
+  assert_fails _load_config_fails CERT_EMAIL=a@b.com "CERT_DOMAINS=*.example.com | challenge=tls-alpn-01"
+}
+
+test_tls_alpn_01_refuses_a_public_port_on_its_loopback_ports() {
+  assert_fails _load_config_fails CERT_EMAIL=a@b.com CERT_DOMAINS=example.com \
+    CERT_CHALLENGE=tls-alpn-01 CERT_HTTPS_PORT=10443
+}
+
+test_tls_alpn_01_refuses_a_load_balancer_address() {
+  assert_fails _load_config_fails CERT_EMAIL=a@b.com CERT_DOMAINS=example.com \
+    CERT_CHALLENGE=tls-alpn-01 CERT_REAL_IP_FROM=10.0.0.0/8
+}
+
+test_the_front_is_needed_only_when_a_certificate_uses_tls_alpn_01() {
+  _parse $'a.example.com\nb.example.com | challenge=alpn'
+  assert_ok config::tls_alpn_front &&
+    { _parse 'a.example.com'; assert_fails config::tls_alpn_front; }
+}

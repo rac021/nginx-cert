@@ -5,8 +5,7 @@
 # available at the paths below.
 
 server {
-    listen      %%HTTPS_PORT%% ssl%%DEFAULT_SUFFIX%%;
-    listen      [::]:%%HTTPS_PORT%% ssl%%DEFAULT_SUFFIX%%;
+%%HTTPS_LISTEN%%
 %%IF HTTP3%%
     # HTTP/3 requires port %%HTTPS_PORT%% to be published over UDP as well.
     listen      %%HTTPS_PORT%% quic%%QUIC_EXTRA%%;

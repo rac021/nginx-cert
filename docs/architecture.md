@@ -159,6 +159,25 @@ wrong configuration.
 Generated files are prefixed `nginx-cert.` in `conf.d/`, and those are the only
 files nginx-cert deletes. Everything else the user mounts there is preserved.
 
+### The TLS-ALPN-01 front
+
+HTTP-01 needs port 80 to reach the container untouched; some networks filter
+it. TLS-ALPN-01 validates inside a TLS handshake on the HTTPS port, which nginx
+already owns, so the port has to be shared rather than handed to acme.sh.
+
+```
+:443  stream, ssl_preread   ALPN acme-tls/1 -> 127.0.0.1:10445 relay -> 127.0.0.1:10444 acme.sh
+                            anything else   -> 127.0.0.1:10443 HTTPS servers (PROXY protocol)
+```
+
+The front never decrypts. The PROXY protocol keeps the client address for the
+HTTPS servers; acme.sh does not speak it, hence the relay, which also bounds
+connections on that path. The responder exists only while acme.sh validates.
+
+`nginx::_https_listen` is the single source of the HTTPS `listen` lines, for the
+generated servers and for the snippet a user's own servers include, so the two
+modes cannot drift apart.
+
 ## Security posture
 
 - The container runs as uid 101; `nginx` gets `CAP_NET_BIND_SERVICE` via a file

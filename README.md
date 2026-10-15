@@ -71,6 +71,7 @@ who prefers the unprefixed convention.
   - [Tuning the fallback chain](#tuning-the-fallback-chain)
   - [Adding an authority](#adding-an-authority)
 - [More complete examples](#more-complete-examples)
+  - [Port 80 filtered: TLS-ALPN-01](#port-80-filtered-tls-alpn-01)
   - [Wildcard certificate (DNS-01)](#wildcard-certificate-dns-01)
   - [IP-address certificates](#ip-address-certificates)
   - [Local development](#local-development)
@@ -460,7 +461,7 @@ See [Renewal](#renewal) for how these interact and for worked examples.
 | Variable | Default | Description |
 |---|---|---|
 | `CERT_KEY_TYPE` | `ec-256` | `ec-256`, `ec-384`, `ec-521`, `2048`, `3072`, `4096`. |
-| `CERT_CHALLENGE` | `auto` | `auto`, `http-01`, `dns-01`. `auto` picks DNS-01 for wildcards. |
+| `CERT_CHALLENGE` | `auto` | `auto`, `http-01`, `dns-01`, `tls-alpn-01`. `auto` picks DNS-01 for wildcards, HTTP-01 otherwise. See [Port 80 filtered: TLS-ALPN-01](#port-80-filtered-tls-alpn-01). |
 | `CERT_DNS_PROVIDER` | — | acme.sh DNS module for DNS-01 (`dns_cf`, `dns_ovh`, …). |
 | `CERT_DNS_SLEEP` | — | Fixed wait for DNS propagation (`20`, `45s`, `2m`). Left unset, acme.sh polls for propagation instead, which is faster and more reliable. |
 | `CERT_PROFILE` | — | Certificate profile requested from the authority. |
@@ -866,6 +867,59 @@ Columns: id, label, acme.sh alias (or `-` for a raw URL), directory URL, EAB
 
 ## More complete examples
 
+### Port 80 filtered: TLS-ALPN-01
+
+Some networks drop the HTTP-01 validation itself — an appliance matching the
+authority's request on `/.well-known/acme-challenge/` — while port 443 is open.
+The authority then reports `Connection reset by peer` and only the local
+certificate is ever installed. TLS-ALPN-01 (RFC 8737) validates on port 443
+instead, inside the TLS handshake.
+
+```yaml
+CERT_DOMAINS: app.example.com | upstream=app:8080
+CERT_CHALLENGE: tls-alpn-01        # or per certificate: challenge=alpn
+```
+
+nginx keeps serving the HTTPS port. In front of the HTTPS servers it reads the
+ALPN list of each handshake, without decrypting anything:
+
+| ALPN offered | Goes to |
+|---|---|
+| `acme-tls/1` | acme.sh's responder, `127.0.0.1:10444`, through a relay limited to 4 connections and 10 s |
+| anything else | the HTTPS servers, now on `127.0.0.1:10443`, with the client address carried by the PROXY protocol |
+
+**Who can call this route?** Anyone, and that is safe. The authority's
+validation addresses are not published and cannot be allow-listed; the
+protocol does not need them to be. The certificate is requested by nginx-cert,
+outbound; the responder only answers a handshake with a temporary certificate
+holding a value derived from the challenge token, which is not secret and
+grants nothing. It listens on the loopback during a validation only — the rest
+of the time an `acme-tls/1` handshake is closed without a certificate. Browsers
+never offer `acme-tls/1`.
+
+Constraints: no wildcard (only DNS-01 can validate one); the HTTPS port cannot
+be 10443-10445; no `CERT_REAL_IP_FROM`, since the client address now arrives
+through the PROXY protocol. Each is refused at startup.
+
+**With your own nginx.conf** (`CERT_MANAGE_NGINX=false`), include the two files
+nginx-cert writes. Both always exist: with another challenge the first is empty
+and the second listens on the HTTPS port directly.
+
+```nginx
+# top level, outside http
+include /etc/nginx/nginx-cert-stream.conf;
+
+http {
+    server {
+        # instead of your own "listen 443 ssl" lines
+        include /etc/nginx/snippets/nginx-cert-https-listen.conf;
+        ...
+    }
+}
+```
+
+A missing include stops the container with exit code 4 and the line to add.
+
 ### Wildcard certificate (DNS-01)
 
 A wildcard cannot be validated over HTTP-01: the authority needs a TXT record,
@@ -1199,7 +1253,31 @@ A failing hook is reported but never undoes the renewal.
 
 ### When renewal fails
 
-The certificate in place keeps serving, and nothing replaces it. The chain
+The certificate in place keeps serving, and nothing replaces it.
+
+**Falling back to a self-signed certificate.** With
+`CERT_FALLBACK_SELFSIGNED=true` (the default), each authority of the chain gets
+`CERT_ATTEMPTS` tries; once all of them have failed, a local self-signed
+certificate is installed and nginx starts on it. For example, three failures
+and then the fallback:
+
+```yaml
+CERT_PROVIDER: letsencrypt
+CERT_ATTEMPTS: "3"
+CERT_FALLBACK_SELFSIGNED: "true"   # "false": no certificate, the run fails
+```
+
+```
+-> Attempt 1/3 with Let's Encrypt.
+-> Attempt 2/3 with Let's Encrypt.
+-> Attempt 3/3 with Let's Encrypt.
+[warn] Let's Encrypt did not deliver 'app.example.com' after 3 attempt(s).
+[ ok ] 'app.example.com' issued by local self-signed certificate
+[ ok ] nginx-cert is up.
+```
+
+The next scheduled check tries the authorities again, and replaces the local
+certificate as soon as one delivers. The chain
 moves to the next authority; if all of them fail, the run is reported as a
 failure and your existing certificate is left exactly as it was.
 

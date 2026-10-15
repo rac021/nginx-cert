@@ -72,6 +72,7 @@ acme::issue() {
   fi
   [[ $challenge == http ]] && challenge=http-01
   [[ $challenge == dns ]]  && challenge=dns-01
+  [[ $challenge == alpn ]] && challenge=tls-alpn-01
 
   if [[ $challenge == dns-01 && -z $dns_provider ]]; then
     log::error "'${name}' needs a DNS-01 challenge but no DNS provider is configured (CERT_DNS_PROVIDER)."
@@ -109,7 +110,10 @@ acme::issue() {
   local d
   for d in "${domains[@]}"; do cmd+=(-d "$d"); done
 
-  if [[ $challenge == dns-01 ]]; then
+  if [[ $challenge == tls-alpn-01 ]]; then
+    # Loopback only: nginx's stream front relays the "acme-tls/1" handshakes.
+    cmd+=(--alpn --tlsport "$NC_ALPN_RESPONDER_PORT" --local-address 127.0.0.1)
+  elif [[ $challenge == dns-01 ]]; then
     cmd+=(--dns "$dns_provider")
     # Only when the user asked for it: --dnssleep replaces acme.sh's own
     # propagation polling with a blind fixed wait, which is both slower and

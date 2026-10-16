@@ -4,6 +4,15 @@ All notable changes to this project are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Changed
+
+- **`new` writes into a host directory, the certbot way.** `help` and the
+  README show `--user root -v /etc/nginx-cert:/data`: the certificate lands in
+  `/etc/nginx-cert/certs/<domain>/`, owned by root, the key 0600. On an
+  unwritable bind mount, `new` now proposes `--user root` before `chown`.
+
 ## [2.7.0] - 2026-10-16
 
 ### Added

@@ -1356,13 +1356,36 @@ any restart, and a rolling update of the service covers a permanent change.
 
 No stack, no Compose file: `new` issues one certificate into `/data`, prints
 where it is, and stops. Ports 80 and 443 must be free on this host and
-reachable from the internet; mount `/data` to keep the result.
+reachable from the internet. Mount a host directory on `/data` to get the files
+on the host — `/etc/nginx-cert`, the way certbot uses `/etc/letsencrypt`:
 
 ```bash
-docker run --rm -p 80:80 -p 443:443 -v nginx-cert-data:/data \
+docker run --rm --user root -p 80:80 -p 443:443 -v /etc/nginx-cert:/data \
   rac021/nginx-cert:v2 new --domain app.example.com --email you@example.com \
   --challenge tls-alpn-01 --staging
 ```
+
+The certificate is then on the host:
+
+```text
+/etc/nginx-cert/
+├── certs/app.example.com/
+│   ├── fullchain.pem   certificate + intermediates: what a server sends
+│   ├── privkey.pem     private key, mode 0600
+│   ├── cert.pem        the certificate alone
+│   └── chain.pem       the intermediates alone
+├── acme/               ACME account: keep it, a rerun reuses it
+├── state/  backups/
+```
+
+`--user root` is what lets the container write a host directory: the image
+otherwise runs as `nginx` (uid 101), and Docker creates the missing directory
+as root. The files are owned by root, the key readable by root only, as with
+certbot. Run the same command again: a certificate still valid is kept (no
+request to the authority), one due for renewal is renewed, and a staging
+certificate is replaced once `--staging` is dropped. A named volume
+(`-v nginx-cert-data:/data`) works without `--user root`, but keeps the files
+inside Docker.
 
 | Option | Variable it sets | Values |
 |---|---|---|

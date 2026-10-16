@@ -32,12 +32,16 @@ EVERYDAY
 
 ONE-SHOT: A CERTIFICATE WITH docker run, NO STACK NEEDED
     Issues one certificate into /data, prints where it is, then stops. Ports 80
-    and 443 must be free here and reachable from the internet; mount /data to
-    keep the result.
+    and 443 must be free here and reachable from the internet. Mounted on
+    /etc/nginx-cert, the result lands on the host, like /etc/letsencrypt:
 
-    docker run --rm -p 80:80 -p 443:443 -v nginx-cert-data:/data \
+    docker run --rm --user root -p 80:80 -p 443:443 -v /etc/nginx-cert:/data \
       rac021/nginx-cert:v2 new --domain app.example.com --email you@example.com \
       --challenge tls-alpn-01 --staging
+
+    -> /etc/nginx-cert/certs/app.example.com/fullchain.pem and privkey.pem,
+       owned by root, the key readable by root only. --user root lets the
+       container write a host directory; Docker creates it if missing.
 
     --domain, -d NAME       Name to certify; repeat it for more names in the
                             same certificate. Required.

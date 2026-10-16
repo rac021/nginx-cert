@@ -772,6 +772,41 @@ else
   ko 'and says which option is missing' "$out"
 fi
 
+# -- Scenario 23b: `new` into a host directory, the certbot way ---------------
+#
+# --user root on a bind mount: the files land on the host, owned by root, the
+# key 0600. A second run keeps the valid certificate. Without --user root, the
+# error names that option.
+hostdir=$(mktemp -d)
+out=$(docker run --rm --network none --user root -v "${hostdir}:/data" "$IMAGE" \
+        new --domain host.test --email a@b.co 2>&1); rc=$?
+check '`new --user root` on a bind mount exits 0' '0' "$rc"
+modes=$(docker run --rm --user root -v "${hostdir}:/d" --entrypoint stat "$IMAGE" -c '%u %a %n' \
+          /d/certs/host.test/fullchain.pem /d/certs/host.test/privkey.pem 2>&1)
+check 'the files are on the host, owned by root, the key 0600' \
+  $'0 644 /d/certs/host.test/fullchain.pem\n0 600 /d/certs/host.test/privkey.pem' "$modes"
+before=$(docker run --rm --user root -v "${hostdir}:/d" --entrypoint sha256sum "$IMAGE" /d/certs/host.test/fullchain.pem)
+docker run --rm --network none --user root -v "${hostdir}:/data" "$IMAGE" \
+  new --domain host.test --email a@b.co >/dev/null 2>&1
+after=$(docker run --rm --user root -v "${hostdir}:/d" --entrypoint sha256sum "$IMAGE" /d/certs/host.test/fullchain.pem)
+if [[ $before == *fullchain.pem && $before == "$after" ]]; then
+  ok 'a second run keeps the valid certificate'
+else
+  ko 'a second run keeps the valid certificate' "before '${before}', after '${after}'"
+fi
+# Root-owned files: removed from inside, before the next case reuses the directory.
+docker run --rm --user root -v "${hostdir}:/d" --entrypoint sh "$IMAGE" -c 'rm -rf /d/* /d/.persistent'
+chmod 700 "$hostdir"
+out=$(docker run --rm --network none --user 65534:65534 -v "${hostdir}:/data" "$IMAGE" \
+        new --domain host.test --email a@b.co 2>&1); rc=$?
+check '`new` on an unwritable bind mount exits with code 2' '2' "$rc"
+if [[ $out == *'--user root'* && $out == *'chown -R'* ]]; then
+  ok 'and proposes --user root, then chown'
+else
+  ko 'and proposes --user root, then chown' "$(tail -4 <<<"$out")"
+fi
+rm -rf "$hostdir"
+
 # -- Result ------------------------------------------------------------------
 printf '\n  %d passed, %d failed\n' "$PASSED" "$FAILED"
 ((FAILED == 0))

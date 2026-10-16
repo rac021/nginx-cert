@@ -57,8 +57,15 @@ bootstrap::prepare_dirs() {
   # this: Docker seeds its ownership from the image.)
   local uid gid fix
   uid=$(id -u); gid=$(id -g)
-  fix="  -> Run: sudo chown -R ${uid}:${gid} <the host directory mounted on ${CFG_DATA_DIR}>
+  local host_dir="<the host directory mounted on ${CFG_DATA_DIR}>"
+  fix="  -> Run: sudo chown -R ${uid}:${gid} ${host_dir}
      Or use a named volume instead of a bind mount: -v nginx-cert-data:${CFG_DATA_DIR}"
+  # A one-shot is the certbot use: files on the host, owned by root, the key
+  # 0600; Docker even creates the host directory.
+  if ((${NC_ONE_SHOT:-0})); then
+    fix="  -> For new, run as root: docker run --user root -v /etc/nginx-cert:${CFG_DATA_DIR} ... new ...
+     Or: sudo chown -R ${uid}:${gid} ${host_dir}"
+  fi
 
   local d
   for d in "$CFG_DATA_DIR" "$CFG_CERT_DIR" "$CFG_ACME_HOME" "$CFG_STATE_DIR" \

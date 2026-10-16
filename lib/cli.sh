@@ -4,7 +4,7 @@
 # writes it, before config::load runs, so an option and its variable can never
 # mean two different things.
 #
-#   docker run --rm -p 80:80 -p 443:443 -v nginx-cert-data:/data \
+#   docker run --rm --user root -p 80:80 -p 443:443 -v /etc/nginx-cert:/data \
 #     rac021/nginx-cert new --domain app.example.com --email you@example.com
 #
 # Secrets (EAB, ZeroSSL API key) are not options: an argument shows in `ps` and
